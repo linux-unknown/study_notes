@@ -565,9 +565,11 @@ static int get_set_conduit_method(struct device_node *np)
 
 PSCI\_0\_2\_FN\_CPU_OFF,PSCI\_0\_2\_FN64_CPU_ON为ARM公司定义的编号,称作**SMC Function Identifier**，不同SMC Function Identifier代表不同功能。改编后可以见文档：ARM_DEN0028A_SMC_Calling_Convention.pdf。
 
-| SMC Function Identifier | Reserved use and sub-range ownership | Notes                                    |
-| :---------------------- | :----------------------------------- | :--------------------------------------- |
-| 0xC4000000-0xC400001F   | PSCI SMC64 bit Calls                 | A range of SMC calls. See [5] for details of |
+| SMC Function Identifier | Reserved use and sub-range ownership | Notes                |
+| :---------------------- | -----------------------------------: | :------------------- |
+| 0xC4000000-0xC400001F   |                 PSCI SMC64 bit Calls | A range of SMC calls |
+
+详细的定义Power State Coordination Interface有描述。
 
 ####  PSCI\_0\_2\_FN64_CPU_ON
 
