@@ -92,7 +92,7 @@ ffff800000080010:       00eb5000        .word   0x00eb5000
 根据Documentation/arm64/booting.txt
 
  The decompressed kernel image contains a 64-byte header as follows:
-
+```
    u32 code0;                    /* Executable code */
    u32 code1;                    /* Executable code */
    u64 text_offset;              /* Image load offset, little endian */
@@ -102,8 +102,8 @@ ffff800000080010:       00eb5000        .word   0x00eb5000
    u64 res3      = 0;            /* reserved */
    u64 res4      = 0;            /* reserved */
    u32 magic     = 0x644d5241;   /* Magic number, little endian, "ARM\x64" */
-   u32 res5;                    /* reserved (used for PE COFF offset) */
-
+   u32 res5;                     /* reserved (used for PE COFF offset) */
+```
 下面是对上面字段的说明：
 
 Header notes:
