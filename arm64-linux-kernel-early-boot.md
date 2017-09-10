@@ -1,3 +1,5 @@
+
+
 # arm64 linux kernel 启动
 
 ### 代码入口地址
@@ -228,10 +230,10 @@ ENTRY(stext)
 	 * __error_p may end up out of range for cbz if text areas are
 	 * aligned up to section sizes.
 	 */
-	cbnz	x23, 1f				// invalid processor (x23=0)?
+	cbnz	x23, 1f				// invalid processor (x23=0)?，如果x23不等于0，跳到1f
 	b	__error_p
 1:
-	bl	__vet_fdt
+	bl	__vet_fdt					//检验fdt的起始地址是否符合规范
 	bl	__create_page_tables		// x25=TTBR0, x26=TTBR1
 	/*
 	 * The following calls CPU specific code in a position independent
@@ -242,13 +244,12 @@ ENTRY(stext)
 	 */
 	ldr	x27, __switch_data		// address to jump to after
 						// MMU has been enabled
-	adrp	lr, __enable_mmu		// return (PIC) address
-	add	lr, lr, #:lo12:__enable_mmu
-	ldr	x12, [x23, #CPU_INFO_SETUP]
+	adrp	lr, __enable_mmu		// return (PIC) address，得到__enable_mmu地址的[63:12]
+	add	lr, lr, #:lo12:__enable_mmu	 //lr + __enable_mmu地址的[11:0]构成完整的地址
+	ldr	x12, [x23, #CPU_INFO_SETUP]	//x23为返回的cpu_tabl的地址
 	add	x12, x12, x28			// __virt_to_phys
-	br	x12				// initialise processor
+	br	x12				// initialise processor,跳转到x12寄存器中的地址处，既__cpu_setup
 ENDPROC(stext)
-
 ```
 
  #### el2_setup
@@ -340,7 +341,7 @@ CPU_LE(	movk	x0, #0x30d0, lsl #16	)	// Clear EE and E0E on LE systems
 ENDPROC(el2_setup)
 ```
 
-### __calc_phys_offset
+#### __calc_phys_offset
 
 ```
 /*
@@ -363,7 +364,7 @@ ENDPROC(__calc_phys_offset)
 1:	.quad	.
 	.quad	PAGE_OFFSET
 ```
-### PAGE_OFFSET & VA_BITS
+##### PAGE_OFFSET & VA_BITS
 ```assembly
 /*memory.h*/
 /*
@@ -379,7 +380,7 @@ ENDPROC(__calc_phys_offset)
 #define PAGE_OFFSET		(UL(0xffffffffffffffff) << (VA_BITS - 1))  //VA_BITS = 48
 ```
 
-### set_cpu_boot_mode_flag
+#### set_cpu_boot_mode_flag
 
 ```
 /*
@@ -414,5 +415,628 @@ ENTRY(__boot_cpu_mode)
 
 ```
 
+#### lookup_processor_type
 
+```assembly
+ #define DEFINE(sym, val) \
+        asm volatile("\n->" #sym " %0 " #val : : "i" (val))
+ DEFINE(CPU_INFO_SZ,		sizeof(struct cpu_info));
+
+ENTRY(lookup_processor_type)
+	adr	x1, __lookup_processor_type_data	/*x0保存有CPUID*/
+	ldp	x2, x3, [x1]
+	sub	x1, x1, x2			// get offset between VA and PA
+	add	x3, x3, x1			// convert VA to PA
+1:
+	ldp	w5, w6, [x3]			// load cpu_id_val and cpu_id_mask
+	cbz	w5, 2f				// end of list?，如果w5为0，跳转到2
+	and	w6, w6, w0			//w6和w0与，w0保存有CPUID
+	cmp	w5, w6
+	b.eq	3f
+	add	x3, x3, #CPU_INFO_SZ
+	b	1b
+2:
+	mov	x3, #0				// unknown processor
+3:
+	mov	x0, x3		/*返回cpu_table数组中对应cpu的地址*/
+	ret
+ENDPROC(lookup_processor_type)
+
+	.align	3
+	.type	__lookup_processor_type_data, %object
+__lookup_processor_type_data:
+	.quad	.
+	.quad	cpu_table	/*cpu_table定义在arch\arm64\kernel\cputable.c*/
+	.size	__lookup_processor_type_data, . - __lookup_processor_type_data
+```
+
+#####  cpu_table
+
+```c
+struct cpu_info {
+	unsigned int	cpu_id_val;
+	unsigned int	cpu_id_mask;
+	const char	*cpu_name;
+	unsigned long	(*cpu_setup)(void);
+};
+
+struct cpu_info cpu_table[] = {
+	{
+		.cpu_id_val	= 0x000f0000,
+		.cpu_id_mask	= 0x000f0000,
+		.cpu_name	= "AArch64 Processor",
+		.cpu_setup	= __cpu_setup,
+	},
+	{ /* Empty */ },
+};
+```
+
+#### __create_page_tables
+
+```assembly
+/*
+ * Setup the initial page tables. We only setup the barest amount which is
+ * required to get the kernel running. The following sections are required:
+ *   - identity mapping to enable the MMU (low address, TTBR0)
+ *   - first few MB of the kernel linear mapping to jump to once the MMU has
+ *     been enabled, including the FDT blob (TTBR1)
+ *   - pgd entry for fixed mappings (TTBR1)
+ */
+__create_page_tables:
+	/*pgtbl为宏，定义在arch\arm64\kernel\head.S*/
+	pgtbl	x25, x26, x28	// idmap_pg_dir and swapper_pg_dir addresses，
+	mov	x27, lr /*x27保存返回地址*/
+
+	/*
+	 * Invalidate the idmap and swapper page tables to avoid potential
+	 * dirty cache lines being evicted.
+	 */
+	mov	x0, x25
+	add	x1, x26, #SWAPPER_DIR_SIZE
+	bl	__inval_cache_range
+
+	/*
+	 * Clear the idmap and swapper page tables.
+	 */
+	mov	x0, x25
+	add	x6, x26, #SWAPPER_DIR_SIZE
+1:	stp	xzr, xzr, [x0], #16
+	stp	xzr, xzr, [x0], #16
+	stp	xzr, xzr, [x0], #16
+	stp	xzr, xzr, [x0], #16
+	cmp	x0, x6
+	b.lo	1b
+
+
+	ldr	x7, =MM_MMUFLAGS  /*0x711,  0111 0001 0001*/
+
+	/*
+	 * Create the identity mapping.identity mapping是虚拟地址等于物理地址的映射，该映射是
+	 * ARM Architecture Reference Manual建议的,如下： 
+	 * If the PA of the software that enables or disables a particular stage of address 		 * translation differs from its VA,speculative instruction fetching can cause 				 * complications. ARM strongly recommends that the PA and VA of any software that enables 	   * or disables a stage of address translation are identical if that stage of translation 	    * controls translations that apply to the software currently being executed.
+	 */
+	mov	x0, x25				// idmap_pg_dir
+	ldr	x3, =KERNEL_START
+	add	x3, x3, x28			// __pa(KERNEL_START)
+	create_pgd_entry x0, x3, x5, x6
+	ldr	x6, =KERNEL_END
+	mov	x5, x3				// __pa(KERNEL_START)
+	add	x6, x6, x28			// __pa(KERNEL_END)
+	create_block_map x0, x7, x3, x5, x6
+
+	/*
+	 * Map the kernel image (starting with PHYS_OFFSET).以映射kernel为例进行分析
+	 */
+	mov	x0, x26				// swapper_pg_dir
+	mov	x5, #PAGE_OFFSET
+	
+	create_pgd_entry x0, x5, x3, x6
+	ldr	x6, =KERNEL_END
+	mov	x3, x24				// phys offset
+	create_block_map x0, x7, x3, x5, x6
+
+	/*
+	 * Map the FDT blob (maximum 2MB; must be within 512MB of
+	 * PHYS_OFFSET).
+	 */
+	mov	x3, x21				// FDT phys address
+	and	x3, x3, #~((1 << 21) - 1)	// 2MB aligned
+	mov	x6, #PAGE_OFFSET
+	sub	x5, x3, x24			// subtract PHYS_OFFSET
+	tst	x5, #~((1 << 29) - 1)		// within 512MB?
+	csel	x21, xzr, x21, ne		// zero the FDT pointer
+	b.ne	1f
+	add	x5, x5, x6			// __va(FDT blob)
+	add	x6, x5, #1 << 21		// 2MB for the FDT blob
+	sub	x6, x6, #1			// inclusive range
+	create_block_map x0, x7, x3, x5, x6
+1:
+	/*
+	 * Since the page tables have been populated with non-cacheable
+	 * accesses (MMU disabled), invalidate the idmap and swapper page
+	 * tables again to remove any speculatively loaded cache lines.
+	 */
+	mov	x0, x25
+	add	x1, x26, #SWAPPER_DIR_SIZE
+	bl	__inval_cache_range
+
+	mov	lr, x27
+	ret
+ENDPROC(__create_page_tables)
+	.ltorg
+```
+
+##### pgtbl宏
+
+```assembly
+	.macro	pgtbl, ttb0, ttb1, virt_to_phys
+	ldr	\ttb1, =swapper_pg_dir
+	ldr	\ttb0, =idmap_pg_dir
+	add	\ttb1, \ttb1, \virt_to_phys
+	add	\ttb0, \ttb0, \virt_to_phys
+	.endm
+```
+
+pgtbl	x25, x26, x28展开：
+
+```assembly
+	ldr	x26, =swapper_pg_dir
+	ldr	x25, =idmap_pg_dir
+	add	x26, x26, x28	/*x26保存swapper_pg_dir的物理地址*/
+	add	x25, x25, x28	/*x25保存idmap_pg_dir的物理地址*/
+```
+
+x28为虚拟得之和物理地址的偏移量，通过该offset可以得到虚拟地址对应的物理地址。idmap_pg_dir和swapper_pg_dir定义在vmlinux.lds.S中
+
+```assembly
+/*arch/arm64/include/asm/page.h*/
+/*CONFIG_ARM64_PGTABLE_LEVELS定义在.config中，在该分析的kernel中配置为4*/
+#define SWAPPER_PGTABLE_LEVELS	(CONFIG_ARM64_PGTABLE_LEVELS - 1) 
+
+#define SWAPPER_DIR_SIZE	(SWAPPER_PGTABLE_LEVELS * PAGE_SIZE)
+#define IDMAP_DIR_SIZE		(SWAPPER_DIR_SIZE)
+
+. = ALIGN(PAGE_SIZE);
+idmap_pg_dir = .;
+. += IDMAP_DIR_SIZE;
+swapper_pg_dir = .;
+. += SWAPPER_DIR_SIZE;
+_end = .;/*kernel image的结束地址*/
+```
+
+##### map the kernel image
+
+以映射kernel image为例进行分析
+
+```assembly
+#define KERNEL_END	_end /*kernel image的结束地址_end定义在链接脚本中*/
+	/*
+	 * Map the kernel image (starting with PHYS_OFFSET).以映射kernel为例进行分析
+	 */
+	mov	x0, x26				// swapper_pg_dir
+	mov	x5, #PAGE_OFFSET
+	
+	create_pgd_entry x0, x5, x3, x6
+	ldr	x6, =KERNEL_END		//
+	/*
+	*x24保存为PAGE_OFFSET的物理地址，
+	*在__calc_phys_offset计算的,既kernel image被放到内存中的地址
+	*/
+	mov	x3, x24				// phys offset
+	create_block_map x0, x7, x3, x5, x6
+```
+
+##### PAGE_OFFSET
+
+PAGE_OFFSET定义如下，定义在arch\arm64\include\asm\memory.h
+
+```c
+/*
+ * PAGE_OFFSET - the virtual address of the start of the kernel image (top
+ *		 (VA_BITS - 1))
+ * VA_BITS - the maximum number of bits for virtual addresses.
+ * TASK_SIZE - the maximum size of a user space task.
+ * TASK_UNMAPPED_BASE - the lower boundary of the mmap VM area.
+ * The module space lives between the addresses given by TASK_SIZE
+ * and PAGE_OFFSET - it must be within 128MB of the kernel text.
+ */
+#define VA_BITS			(CONFIG_ARM64_VA_BITS) /*CONFIG_ARM64_VA_BITS = 48*/
+/*kernel image虚拟地址映射的起始地址*/
+#define PAGE_OFFSET		(UL(0xffffffffffffffff) << (VA_BITS - 1))
+```
+
+##### create_pgd_entry
+
+```
+/*
+ * Macro to populate the PGD (and possibily PUD) for the corresponding
+ * block entry in the next level (tbl) for the given virtual address.
+ *
+ * Preserves:	tbl, next, virt
+ * Corrupts:	tmp1, tmp2
+ */
+	.macro	create_pgd_entry, tbl, virt, tmp1, tmp2
+	create_table_entry \tbl, \virt, PGDIR_SHIFT, PTRS_PER_PGD, \tmp1, \tmp2
+#if SWAPPER_PGTABLE_LEVELS == 3
+	create_table_entry \tbl, \virt, TABLE_SHIFT, PTRS_PER_PTE, \tmp1, \tmp2
+#endif
+	.endm
+```
+
+##### create_table_entry
+
+```
+/*
+ * Macro to create a table entry to the next page.
+ *
+ *	tbl:	page table address
+ *	virt:	virtual address
+ *	shift:	#imm page table shift
+ *	ptrs:	#imm pointers per table page
+ *
+ * Preserves:	virt
+ * Corrupts:	tmp1, tmp2
+ * Returns:	tbl -> next level table page address
+ */
+	.macro	create_table_entry, tbl, virt, shift, ptrs, tmp1, tmp2
+	lsr	\tmp1, \virt, #\shift
+	and	\tmp1, \tmp1, #\ptrs - 1	// table index
+	add	\tmp2, \tbl, #PAGE_SIZE
+	orr	\tmp2, \tmp2, #PMD_TYPE_TABLE	// address of next table and entry type
+	str	\tmp2, [\tbl, \tmp1, lsl #3]
+	add	\tbl, \tbl, #PAGE_SIZE		// next level table page
+	.endm
+```
+
+
+该分析的kernel配置为4KB的粒度，采用四级页表，所以页表的格式如下：
+
+Translation table lookup with 4KB pages，由于armV8a只支持48bit地址，如果没有开启tag，[63:48]都是一样的，全是0或1.在内核空间全是1，在用户空间全是0.全是0则用TTBR0作为页表的起始地址，全是1则使用TTBR1作为页表的起始地址。
+
+**内核启动时进行的地址映射与下面的有一点区别，内核使用了block映射，所以没有L3**。
+
+![table_format](./table_format.JPG)
+
+kernel映射create_pgd_entry展开，create_pgd_entry只填写了前两级页表，最后映射到的物理地址由create_block_map决定
+
+```assembly
+create_pgd_entry x0, x5, x3, x6
+--->
+	create_table_entry x0, x5, PGDIR_SHIFT, PTRS_PER_PGD, x3, x6	//x5:虚拟地址
+	--->
+		lsr	x3, x5, #PGDIR_SHIFT		//x5虚拟地址右移PGDIR_SHIFT
+		/*
+		 * table index，获取该虚拟地址对应的页表index。 
+		 * PTRS_PER_PGD = 512,PTRS_PER_PGD表示该级页表总共有多少个entry，
+		 * 减1用于生产掩码。
+		 */
+		and	x3, x3, #PTRS_PER_PGD - 1	// table index
+		/*
+		*x6现在为下一级页表的起始地址，因为PG级页表总共512项，每一项占8字节，
+		*所以刚好占用4K字节，即一页。
+		*/
+		add	x6, x0, #PAGE_SIZE
+		/*PMD_TYPE_TABLE = 3表示下一级页表为一个页表描述符,由ARM参考手册规定*/
+		orr	x6, x6, #PMD_TYPE_TABLE		// address of next table and entry type
+		/*把下一级页表的起始地址写入该虚拟地址对应的PGD索引中，一个页表项占8个字节，所以左移3位*/
+		str	x6, [x0, x3, lsl #3]
+		/*x0现在为下一级页表的起始地址，原来为PGD起始地址，既swapper_pg_dir*/
+		add	x0, x0, #PAGE_SIZE			// next level table page
+
+	create_table_entry x0, x5, TABLE_SHIFT, PTRS_PER_PTE, x3, x6 /*x5为虚拟地址*/
+	--->
+		lsr	x3, x5, #TABLE_SHIFT		//TABLE_SHIFT = 30,//x5虚拟地址右移TABLE_SHIFT
+		and	x3, x3, #PTRS_PER_PTE - 1	// table index,得带该虚拟地址在下一级页表中的索引
+		/*
+		*x6现在为下一级页表的起始地址，因为下一级页表总共512项，每一项占8字节，
+		*所以刚好占用4K字节，即一页。
+		*/
+		add	x6, x0, #PAGE_SIZE
+        /*PMD_TYPE_TABLE = 3表示下一级页表为一个页表描述符,由ARM参考手册规定*/
+		orr	x6, x6, #PMD_TYPE_TABLE		// address of next table and entry type
+		/*把下一级页表的起始地址写入该虚拟地址对应的页表索引中，一个页表项占8个字节，所以左移3位*/
+		str	x6, [x0, x3, lsl #3]
+		add	x0, x0, #PAGE_SIZE			// next level table page
+```
+
+```c
+/*\arch\arm64\include\asm\pgtable-hwdef.h*/
+
+/*
+ * PGDIR_SHIFT determines the size a top-level page table entry can map
+ * (depending on the configuration, this level can be 0, 1 or 2).
+ */
+/*(12 -3)*4 +3 = 39*/
+#define PGDIR_SHIFT		((PAGE_SHIFT - 3) * CONFIG_ARM64_PGTABLE_LEVELS + 3) 
+#define PGDIR_SIZE		(_AC(1, UL) << PGDIR_SHIFT)
+#define PGDIR_MASK		(~(PGDIR_SIZE-1))
+/*PGD中页表项的数目1 << (48 - 12) = 512*/
+#define PTRS_PER_PGD		(1 << (VA_BITS - 39)) 
+
+/*
+ * PUD_SHIFT determines the size a level 1 page table entry can map.
+ */
+#if CONFIG_ARM64_PGTABLE_LEVELS > 3
+#define PUD_SHIFT		((PAGE_SHIFT - 3) * 3 + 3)
+#define PUD_SIZE		(_AC(1, UL) << PUD_SHIFT)
+#define PUD_MASK		(~(PUD_SIZE-1))
+#define PTRS_PER_PUD		PTRS_PER_PTE
+#endif
+
+#define PTRS_PER_PTE		(1 << (PAGE_SHIFT - 3)) /* 1 << 9 = 512*/
+
+/*arch\arm64\kernel\head.S*/
+#define TABLE_SHIFT	PUD_SHIFT /* (12 - 3) * 3 + 3 = 30 */
+```
+##### create_block_map
+```
+/*
+ * Macro to populate block entries in the page table for the start..end
+ * virtual range (inclusive).
+ *
+ * Preserves:	tbl, flags
+ * Corrupts:	phys, start, end, pstate
+ */
+	.macro	create_block_map, tbl, flags, phys, start, end
+	lsr	\phys, \phys, #BLOCK_SHIFT
+	lsr	\start, \start, #BLOCK_SHIFT
+	and	\start, \start, #PTRS_PER_PTE - 1	// table index
+	orr	\phys, \flags, \phys, lsl #BLOCK_SHIFT	// table entry
+	lsr	\end, \end, #BLOCK_SHIFT
+	and	\end, \end, #PTRS_PER_PTE - 1		// table end index
+9999:	str	\phys, [\tbl, \start, lsl #3]		// store the entry
+	add	\start, \start, #1			// next entry
+	add	\phys, \phys, #BLOCK_SIZE		// next block
+	cmp	\start, \end
+	b.ls	9999b
+	.endm
+```
+
+create_block_map x0, x7, x3, x5, x6展开如下：
+
+```assembly
+/*F:arch\arm64\include\asm\pgtable-hwdef.h*/
+#define PMD_SHIFT		((PAGE_SHIFT - 3) * 2 + 3) /*(12-3)*2+3 = 21*/
+#define SECTION_SHIFT		PMD_SHIFT
+#define SECTION_SIZE		(_AC(1, UL) << SECTION_SHIFT)
+#define SECTION_MASK		(~(SECTION_SIZE-1))
+
+#define BLOCK_SHIFT	SECTION_SHIFT
+#define BLOCK_SIZE	SECTION_SIZE
+#define TABLE_SHIFT	PUD_SHIFT
+
+/*create_block_map宏展开*/		
+/*x0=swapper_pg_dir,x7=MM_MMUFLAGS,x3=PAGE_OFFSET,x5=PAGE_OFFSET x6=KERNEL_END*/
+create_block_map x0, x7, x3, x5, x6  
+--->
+	create_block_map, tbl, flags, phys, start, end
+	展开如下：
+		/*
+		*BLOCK映射，一个页表项映射BLOCK物理地址大小，所以物理地址都是BLOCK的整数倍，
+		*所以右移BLOCK_SHIFT
+		*/
+		lsr	x3, x3, #BLOCK_SHIFT			//BLOCK_SHIFT = 21
+		lsr	x5, x5, #BLOCK_SHIFT			//虚拟地址右移BLOCK_SHIFT，获取页表中的索引
+		and	x5, x5, #PTRS_PER_PTE - 1		// table index,起始虚拟地址对应的索引
+		orr	x3, x7, x3, lsl #BLOCK_SHIFT	// table entry, 配置block地址属性
+		lsr	x6, x6, #BLOCK_SHIFT			//因为是BLOCK映射，随意虚拟地址结束是BLOCK整数倍
+		and	x6, x6, #PTRS_PER_PTE - 1		// table end index，虚拟地址结束的索引
+	9999:
+		/*把虚拟地址对应的物理地址写入到该虚拟地址对应的索引地址中，一个entry占8个字节，所以左移3*/
+		str	x3, [x0, x5, lsl #3]			// store the entry
+		/*索引加1*/
+		add	x5, x5, #1						// next entry
+		/*
+		 * BLOCK_SIZE物理地址增加一个BLOCK_SIZE,BLOCK_SIZE = 1<<BLOCK_SHIFT = 2M,
+		 * 因为一个entry映射一个BLOCK_SIZE
+		 */
+		add	x3, x3, #BLOCK_SIZE				// next block， 
+
+		/*
+		 * x5是起始虚拟地址对应的索引， 
+		 * x6是结束虚拟地址对应的索引
+		 * 一直循环知道将所有虚拟地址映射完毕，该映射的虚拟地址和物理地址都是连续的。
+		 */
+		cmp	x5, x6							
+		b.ls	9999b	
+        /*
+		* 由于block描述符输出的是物理地址，所以实现了虚拟地址到物理地址的映射过程
+		*/
+```
+
+页表映射如下图：
+
+![页表在内存中的布局](swapper_pg_dir_mmu_table.jpg)
+
+#### __cpu_setup
+
+mmu配置相关，后面分析
+
+```assembly
+/*\arch\arm64\mm\proc.S*/
+/*
+ *	__cpu_setup
+ *
+ *	Initialise the processor for turning the MMU on.  Return in x0 the
+ *	value of the SCTLR_EL1 register.
+ */
+ENTRY(__cpu_setup)
+	ic	iallu				// I+BTB cache invalidate
+	tlbi	vmalle1is			// invalidate I + D TLBs
+	dsb	ish
+
+	mov	x0, #3 << 20
+	msr	cpacr_el1, x0			// Enable FP/ASIMD
+	msr	mdscr_el1, xzr			// Reset mdscr_el1
+	/*
+	 * Memory region attributes for LPAE:
+	 *
+	 *   n = AttrIndx[2:0]
+	 *			n	MAIR
+	 *   DEVICE_nGnRnE	000	00000000
+	 *   DEVICE_nGnRE	001	00000100
+	 *   DEVICE_GRE		010	00001100
+	 *   NORMAL_NC		011	01000100
+	 *   NORMAL		100	11111111
+	 */
+	ldr	x5, =MAIR(0x00, MT_DEVICE_nGnRnE) | \
+		     MAIR(0x04, MT_DEVICE_nGnRE) | \
+		     MAIR(0x0c, MT_DEVICE_GRE) | \
+		     MAIR(0x44, MT_NORMAL_NC) | \
+		     MAIR(0xff, MT_NORMAL)
+	msr	mair_el1, x5
+	/*
+	 * Prepare SCTLR
+	 */
+	adr	x5, crval
+	ldp	w5, w6, [x5]
+	mrs	x0, sctlr_el1
+	bic	x0, x0, x5			// clear bits
+	orr	x0, x0, x6			// set bits
+	/*
+	 * Set/prepare TCR and TTBR. We use 512GB (39-bit) address range for
+	 * both user and kernel.
+	 */
+	ldr	x10, =TCR_TxSZ(VA_BITS) | TCR_CACHE_FLAGS | TCR_SMP_FLAGS | \
+			TCR_TG_FLAGS | TCR_ASID16 | TCR_TBI0
+	/*
+	 * Read the PARange bits from ID_AA64MMFR0_EL1 and set the IPS bits in
+	 * TCR_EL1.
+	 */
+	mrs	x9, ID_AA64MMFR0_EL1
+	bfi	x10, x9, #32, #3
+	msr	tcr_el1, x10
+	/*lr寄存器中保存的为__enable_mmu地址，所以返回到__enable_mmu处执行*/
+	ret					// return to head.S
+ENDPROC(__cpu_setup)
+```
+
+#### __enable_mmu
+
+```assembly
+/*
+ * Setup common bits before finally enabling the MMU. Essentially this is just
+ * loading the page table pointer and vector base registers.
+ *
+ * On entry to this code, x0 must contain the SCTLR_EL1 value for turning on
+ * the MMU.
+ */
+__enable_mmu:
+	ldr	x5, =vectors
+	msr	vbar_el1, x5			//配置异常基地址
+	msr	ttbr0_el1, x25			// load TTBR0
+	msr	ttbr1_el1, x26			// load TTBR1
+	isb
+	b	__turn_mmu_on
+ENDPROC(__enable_mmu)
+```
+
+#### __turn_mmu_on
+
+```assembly
+/*
+ * Enable the MMU. This completely changes the structure of the visible memory
+ * space. You will not be able to trace execution through this.
+ *
+ *  x0  = system control register
+ *  x27 = *virtual* address to jump to upon completion
+ *
+ * other registers depend on the function called upon completion
+ *
+ * We align the entire function to the smallest power of two larger than it to
+ * ensure it fits within a single block map entry. Otherwise were PHYS_OFFSET
+ * close to the end of a 512MB or 1GB block we might require an additional
+ * table to map the entire function.
+ */
+	.align	4
+__turn_mmu_on:
+	msr	sctlr_el1, x0
+	isb
+	br	x27  //x27 = __switch_data，跳转到__switch_data
+ENDPROC(__turn_mmu_on)
+```
+
+#### __switch_data
+
+`__switch_data`既`__mmap_switched`的地址，所以实际跳转到`__mmap_switched`
+
+```assembly
+/*\arch\arm64\include\asm\thread_info.h*/
+#define THREAD_SIZE		16384	/*4个页（如果也为4K）*/
+#define THREAD_START_SP		(THREAD_SIZE - 16)
+
+__switch_data:
+	/*.quad占用8个字节*/
+	.quad	__mmap_switched
+	.quad	__bss_start			// x6
+	.quad	__bss_stop			// x7
+	.quad	processor_id			// x4
+	.quad	__fdt_pointer			// x5
+	.quad	memstart_addr			// x6
+	/*init_thread_union定义在\init\init_task.c */
+	.quad	init_thread_union + THREAD_START_SP // sp
+
+/*
+ * The following fragment of code is executed with the MMU on in MMU mode, and
+ * uses absolute addresses; this is not position independent.
+ */
+__mmap_switched:
+	adr	x3, __switch_data + 8
+
+	ldp	x6, x7, [x3], #16
+1:	cmp	x6, x7
+	b.hs	2f
+	str	xzr, [x6], #8			// Clear BSS
+	b	1b
+2:
+	ldp	x4, x5, [x3], #16
+	ldr	x6, [x3], #8
+	ldr	x16, [x3]
+	mov	sp, x16				//初始化堆栈指针
+	str	x22, [x4]			// Save processor ID
+	str	x21, [x5]			// Save FDT pointer
+	str	x24, [x6]			// Save PHYS_OFFSET
+	mov	x29, #0
+	b	start_kernel		//跳转到c语言实现的函数start_kernel	
+ENDPROC(__mmap_switched)
+```
+
+#### init_thread_union
+
+```c
+
+/* Attach to the init_task data structure for proper alignment */
+#define __init_task_data __attribute__((__section__(".data..init_task")))
+
+union thread_union init_thread_union __init_task_data =
+	{ INIT_THREAD_INFO(init_task) };
+
+```
+
+init_thread_union是也对齐的。在vmlinux.lds.S中定义
+
+```assembly
+#define INIT_TASK_DATA(align)						\
+	. = ALIGN(align);						\
+	*(.data..init_task)
+
+#define RW_DATA_SECTION(cacheline, pagealigned, inittask)		\
+	. = ALIGN(PAGE_SIZE);						\
+	.data : AT(ADDR(.data) - LOAD_OFFSET) {				\
+		INIT_TASK_DATA(inittask)				\
+		NOSAVE_DATA						\
+		PAGE_ALIGNED_DATA(pagealigned)				\
+		CACHELINE_ALIGNED_DATA(cacheline)			\
+		READ_MOSTLY_DATA(cacheline)				\
+		DATA_DATA						\
+		CONSTRUCTORS						\
+	}
+
+. = ALIGN(PAGE_SIZE);
+	_data = .;
+	_sdata = .;
+	RW_DATA_SECTION(64, PAGE_SIZE, THREAD_SIZE)
+	PECOFF_EDATA_PADDING
+	_edata = .;
+```
 
