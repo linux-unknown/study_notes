@@ -446,7 +446,7 @@ ENDPROC(lookup_processor_type)
 	.type	__lookup_processor_type_data, %object
 __lookup_processor_type_data:
 	.quad	.
-	.quad	cpu_table	/*cpu_table定义在arch\arm64\kernel\cputable.c*/
+	.quad	cpu_table	/*cpu_table定义在arch/arm64/kerne/cputable.c*/
 	.size	__lookup_processor_type_data, . - __lookup_processor_type_data
 ```
 
@@ -483,7 +483,7 @@ struct cpu_info cpu_table[] = {
  *   - pgd entry for fixed mappings (TTBR1)
  */
 __create_page_tables:
-	/*pgtbl为宏，定义在arch\arm64\kernel\head.S*/
+	/*pgtbl为宏，定义在arch/arm64/kernel/head.S*/
 	pgtbl	x25, x26, x28	// idmap_pg_dir and swapper_pg_dir addresses，
 	mov	x27, lr /*x27保存返回地址*/
 
@@ -647,7 +647,7 @@ PAGE_OFFSET定义如下，定义在arch\arm64\include\asm\memory.h
 
 ##### create_pgd_entry
 
-```
+```assembly
 /*
  * Macro to populate the PGD (and possibily PUD) for the corresponding
  * block entry in the next level (tbl) for the given virtual address.
@@ -665,7 +665,7 @@ PAGE_OFFSET定义如下，定义在arch\arm64\include\asm\memory.h
 
 ##### create_table_entry
 
-```
+```assembly
 /*
  * Macro to create a table entry to the next page.
  *
@@ -740,7 +740,7 @@ create_pgd_entry x0, x5, x3, x6
 ```
 
 ```c
-/*\arch\arm64\include\asm\pgtable-hwdef.h*/
+/* arch/arm64/include/asm\pgtable-hwdef.h */
 
 /*
  * PGDIR_SHIFT determines the size a top-level page table entry can map
@@ -769,7 +769,7 @@ create_pgd_entry x0, x5, x3, x6
 #define TABLE_SHIFT	PUD_SHIFT /* (12 - 3) * 3 + 3 = 30 */
 ```
 ##### create_block_map
-```
+```assembly
 /*
  * Macro to populate block entries in the page table for the start..end
  * virtual range (inclusive).
@@ -795,7 +795,7 @@ create_pgd_entry x0, x5, x3, x6
 create_block_map x0, x7, x3, x5, x6展开如下：
 
 ```assembly
-/*F:arch\arm64\include\asm\pgtable-hwdef.h*/
+/* arch/arm64/include/asm/pgtable-hwdef.h */
 #define PMD_SHIFT		((PAGE_SHIFT - 3) * 2 + 3) /*(12-3)*2+3 = 21*/
 #define SECTION_SHIFT		PMD_SHIFT
 #define SECTION_SIZE		(_AC(1, UL) << SECTION_SHIFT)
@@ -853,7 +853,7 @@ create_block_map x0, x7, x3, x5, x6
 mmu配置相关，后面分析
 
 ```assembly
-/*\arch\arm64\mm\proc.S*/
+/* /arch/arm64/mm/proc.S */
 /*
  *	__cpu_setup
  *
@@ -961,7 +961,7 @@ ENDPROC(__turn_mmu_on)
 `__switch_data`既`__mmap_switched`的地址，所以实际跳转到`__mmap_switched`
 
 ```assembly
-/*\arch\arm64\include\asm\thread_info.h*/
+/* arch/arm64/include/asm/thread_info.h*/
 #define THREAD_SIZE		16384	/*4个页（如果也为4K）*/
 #define THREAD_START_SP		(THREAD_SIZE - 16)
 
@@ -973,7 +973,7 @@ __switch_data:
 	.quad	processor_id			// x4
 	.quad	__fdt_pointer			// x5
 	.quad	memstart_addr			// x6
-	/*init_thread_union定义在\init\init_task.c */
+	/*init_thread_union定义在/init/init_task.c */
 	.quad	init_thread_union + THREAD_START_SP // sp
 
 /*
