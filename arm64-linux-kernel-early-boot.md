@@ -1013,7 +1013,7 @@ union thread_union init_thread_union __init_task_data =
 
 ```
 
-init_thread_union是也对齐的。在vmlinux.lds.S中定义
+init_thread_union是页对齐的。在vmlinux.lds.S中定义
 
 ```assembly
 #define INIT_TASK_DATA(align)						\
