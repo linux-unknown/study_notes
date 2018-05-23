@@ -96,7 +96,7 @@ void clockevents_exchange_device(struct clock_event_device *old,
 		/*将该event从clockevent_devices中删除*/
 		list_del(&old->list);
 		/*添加到clockevents_released，在后面调用clockevents_notify_released会用到，
-		*会进行dev exchange
+		*会进行device exchange
 		*/
 		list_add(&old->list, &clockevents_released);
 	}
@@ -107,6 +107,42 @@ void clockevents_exchange_device(struct clock_event_device *old,
 	}
 	local_irq_restore(flags);
 }
+
+/*
+ * Event handler for periodic ticks
+ */
+void tick_handle_periodic(struct clock_event_device *dev)
+{
+	int cpu = smp_processor_id();
+	ktime_t next = dev->next_event;
+
+	tick_periodic(cpu);
+
+	if (dev->mode != CLOCK_EVT_MODE_ONESHOT)
+		return;
+	for (;;) {
+		/*
+		 * Setup the next period for devices, which do not have
+		 * periodic mode:
+		 */
+		next = ktime_add(next, tick_period);
+
+		if (!clockevents_program_event(dev, next, false))
+			return;
+		/*
+		 * Have to be careful here. If we're in oneshot mode,
+		 * before we call tick_periodic() in a loop, we need
+		 * to be sure we're using a real hardware clocksource.
+		 * Otherwise we could get trapped in an infinite
+		 * loop, as the tick_periodic() increments jiffies,
+		 * which then will increment time, possibly causing
+		 * the loop to trigger again and again.
+		 */
+		if (timekeeping_valid_for_hres())
+			tick_periodic(cpu);
+	}
+}
+
 
 void tick_set_periodic_handler(struct clock_event_device *dev, int broadcast)
 {
@@ -140,14 +176,206 @@ void tick_setup_periodic(struct clock_event_device *dev, int broadcast)
 			next = tick_next_period;
 		} while (read_seqretry(&jiffies_lock, seq));
 
+		/*设置为CLOCK_EVT_MODE_ONESHOT模式*/
 		clockevents_set_mode(dev, CLOCK_EVT_MODE_ONESHOT);
 
 		for (;;) {
+			/*编程下一次到期时间*/
 			if (!clockevents_program_event(dev, next, false))
 				return;
 			next = ktime_add(next, tick_period);
 		}
 	}
+}
+
+ktime_t ktime_get(void)
+{
+	/**
+	 *启动的时候timekeeper的clock source为clocksource_jiffies
+	 *timekeeping_init中会进行初始化
+	 */
+	struct timekeeper *tk = &tk_core.timekeeper;
+	unsigned int seq;
+	ktime_t base;
+	s64 nsecs;
+
+	do {
+		seq = read_seqcount_begin(&tk_core.seq);
+		base = tk->tkr.base_mono;
+		nsecs = timekeeping_get_ns(&tk->tkr);
+
+	} while (read_seqcount_retry(&tk_core.seq, seq));
+
+	return ktime_add_ns(base, nsecs);
+}
+EXPORT_SYMBOL_GPL(ktime_get);
+
+/*arm64*/
+
+static void gic_raise_softirq(const struct cpumask *mask, unsigned int irq)
+{
+	int cpu;
+
+	if (WARN_ON(irq >= 16))
+		return;
+
+	/*
+	 * Ensure that stores to Normal memory are visible to the
+	 * other CPUs before issuing the IPI.
+	 */
+	smp_wmb();
+
+	for_each_cpu_mask(cpu, *mask) {
+		u64 cluster_id = cpu_logical_map(cpu) & ~0xffUL;
+		u16 tlist;
+
+		tlist = gic_compute_target_list(&cpu, mask, cluster_id);
+		gic_send_sgi(cluster_id, tlist, irq);
+	}
+
+	/* Force the above writes to ICC_SGI1R_EL1 to be executed */
+	isb();
+}
+
+static void gic_smp_init(void)
+{
+	set_smp_cross_call(gic_raise_softirq);
+	register_cpu_notifier(&gic_cpu_notifier);
+}
+
+
+void (*__smp_cross_call)(const struct cpumask *, unsigned int);
+
+void __init set_smp_cross_call(void (*fn)(const struct cpumask *, unsigned int))
+{
+	__smp_cross_call = fn;
+}
+
+
+static void smp_cross_call(const struct cpumask *target, unsigned int ipinr)
+{
+	trace_ipi_raise(target, ipi_types[ipinr]);
+	__smp_cross_call(target, ipinr);
+}
+
+
+#ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
+void tick_broadcast(const struct cpumask *mask)
+{
+	smp_cross_call(mask, IPI_TIMER);
+}
+#endif
+
+
+static void tick_device_setup_broadcast_func(struct clock_event_device *dev)
+{
+	if (!dev->broadcast)
+		dev->broadcast = tick_broadcast;
+
+	/*tick_broadcast可能被定义为空*/
+	if (!dev->broadcast) {
+		pr_warn_once("%s depends on broadcast, but no broadcast function available\n",
+			     dev->name);
+		dev->broadcast = err_broadcast;
+	}
+}
+
+
+/*
+ * Check, if the device is functional or a dummy for broadcast
+ */
+static inline int tick_device_is_functional(struct clock_event_device *dev)
+{
+	return !(dev->features & CLOCK_EVT_FEAT_DUMMY);
+}
+
+/*
+ * Check, if the device is disfunctional and a place holder, which
+ * needs to be handled by the broadcast device.
+ */
+int tick_device_uses_broadcast(struct clock_event_device *dev, int cpu)
+{
+	struct clock_event_device *bc = tick_broadcast_device.evtdev;
+	unsigned long flags;
+	int ret;
+
+	raw_spin_lock_irqsave(&tick_broadcast_lock, flags);
+
+	/*
+	 * Devices might be registered with both periodic and oneshot
+	 * mode disabled. This signals, that the device needs to be
+	 * operated from the broadcast device and is a placeholder for
+	 * the cpu local device.
+	 */
+	if (!tick_device_is_functional(dev)) {
+		dev->event_handler = tick_handle_periodic;
+		tick_device_setup_broadcast_func(dev);
+		cpumask_set_cpu(cpu, tick_broadcast_mask);
+		if (tick_broadcast_device.mode == TICKDEV_MODE_PERIODIC)
+			tick_broadcast_start_periodic(bc);
+		else
+			tick_broadcast_setup_oneshot(bc);
+		ret = 1;
+	} else {
+		/*
+		 * Clear the broadcast bit for this cpu if the
+		 * device is not power state affected.
+		 */
+		/**
+		 *如果不支持CLOCK_EVT_FEAT_C3STOP状态，则清楚tick_broadcast_mask
+		 *tick_broadcast的tick会stop，不支持CLOCK_EVT_FEAT_C3STOP，则表示该
+		 *tick会一直运行
+		 */
+		if (!(dev->features & CLOCK_EVT_FEAT_C3STOP))
+			cpumask_clear_cpu(cpu, tick_broadcast_mask);
+		else
+			tick_device_setup_broadcast_func(dev);
+
+		/*
+		 * Clear the broadcast bit if the CPU is not in
+		 * periodic broadcast on state.
+		 */
+		if (!cpumask_test_cpu(cpu, tick_broadcast_on))
+			cpumask_clear_cpu(cpu, tick_broadcast_mask);
+
+		switch (tick_broadcast_device.mode) {
+		case TICKDEV_MODE_ONESHOT:
+			/*
+			 * If the system is in oneshot mode we can
+			 * unconditionally clear the oneshot mask bit,
+			 * because the CPU is running and therefore
+			 * not in an idle state which causes the power
+			 * state affected device to stop. Let the
+			 * caller initialize the device.
+			 */
+			tick_broadcast_clear_oneshot(cpu);
+			ret = 0;
+			break;
+
+		case TICKDEV_MODE_PERIODIC:/*默认为TICKDEV_MODE_PERIODIC*/
+			/*
+			 * If the system is in periodic mode, check
+			 * whether the broadcast device can be
+			 * switched off now.
+			 */
+			if (cpumask_empty(tick_broadcast_mask) && bc)
+				clockevents_shutdown(bc);
+			/*
+			 * If we kept the cpu in the broadcast mask,
+			 * tell the caller to leave the per cpu device
+			 * in shutdown state. The periodic interrupt
+			 * is delivered by the broadcast device.
+			 */
+			ret = cpumask_test_cpu(cpu, tick_broadcast_mask);/*返回0*/
+			break;
+		default:
+			/* Nothing to do */
+			ret = 0;
+			break;
+		}
+	}
+	raw_spin_unlock_irqrestore(&tick_broadcast_lock, flags);
+	return ret;
 }
 
 
@@ -169,14 +397,17 @@ static void tick_setup_device(struct tick_device *td,
 		 * If no cpu took the do_timer update, assign it to
 		 * this cpu:
 		 */
-		/*tick_do_timer_cpu表示那一个timer用来调用do_timer函数*/
+		/**
+		 *tick_do_timer_cpu表示那一个timer用来调用do_timer函数
+		 *需要有一个global的tick device管理全局的jiffies等时间信息
+		 */
 		if (tick_do_timer_cpu == TICK_DO_TIMER_BOOT) {
-			if (!tick_nohz_full_cpu(cpu))
+			if (!tick_nohz_full_cpu(cpu))/*分析的代码中该函数直接返回false*/
 				tick_do_timer_cpu = cpu;
 			else
 				tick_do_timer_cpu = TICK_DO_TIMER_NONE;
-			tick_next_period = ktime_get();
-			tick_period = ktime_set(0, NSEC_PER_SEC / HZ);
+			tick_next_period = ktime_get();/**/
+			tick_period = ktime_set(0, NSEC_PER_SEC / HZ);/*tick_period赋值*/
 		}
 
 		/*
@@ -205,13 +436,29 @@ static void tick_setup_device(struct tick_device *td,
 	 * way. This function also returns !=0 when we keep the
 	 * current active broadcast state for this CPU.
 	 */
-	if (tick_device_uses_broadcast(newdev, cpu))
+	if (tick_device_uses_broadcast(newdev, cpu)) /*返回0*/
 		return;
 
+	/*初始的td mode为TICKDEV_MODE_PERIODIC*/
 	if (td->mode == TICKDEV_MODE_PERIODIC)
 		tick_setup_periodic(newdev, 0);
 	else
 		tick_setup_oneshot(newdev, handler, next_event);
+}
+
+
+/*
+ * Async notification about clock event changes
+ */
+/**
+ *在软中断run_timer_softirq中会进行检查ts->check_clocks是否置位，
+ 如果置位则会调用tick_check_oneshot_change切换到oneshot状态
+ */
+void tick_oneshot_notify(void)
+{
+	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
+	/*bit 0置1*/
+	set_bit(0, &ts->check_clocks);
 }
 
 
@@ -550,6 +797,7 @@ static void __init arch_timer_init(struct device_node *np)
 
 	/*最终会注册clock_device*/
 	arch_timer_register();
+	/*最终会注册clock cource*/
 	arch_timer_common_init();
 }
 
