@@ -450,9 +450,15 @@ static void tick_setup_device(struct tick_device *td,
 /*
  * Async notification about clock event changes
  */
+
 /**
+ *tick_periodic-->update_process_times-->run_local_timers
+ *-->raise_softirq
+ *run_timer_softirq-->hrtimer_run_pending
  *在软中断run_timer_softirq中会进行检查ts->check_clocks是否置位，
- 如果置位则会调用tick_check_oneshot_change切换到oneshot状态
+ *如果置位则会调用tick_check_oneshot_change切换到oneshot状态
+ *
+ *在timer的每次中断中都会调用run_timer_softirq
  */
 void tick_oneshot_notify(void)
 {
@@ -846,7 +852,15 @@ void __init time_init(void)
 
 asmlinkage __visible void __init start_kernel(void)
 {
+	init_IRQ();
+	tick_init();
+	rcu_init_nohz();
+	init_timers();
+	hrtimers_init();
+	softirq_init();
+	timekeeping_init();
 	time_init();
+	sched_clock_postinit();
 }
 
 

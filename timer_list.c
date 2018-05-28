@@ -6,6 +6,9 @@
 #define TVR_MASK (TVR_SIZE - 1)
 #define MAX_TVAL ((unsigned long)((1ULL << (TVR_BITS + 4*TVN_BITS)) - 1))
 
+/*N+1的tv有没有到期的timer*/
+#define INDEX(N) ((base->timer_jiffies >> (TVR_BITS + (N) * TVN_BITS)) & TVN_MASK)
+
 struct tvec {
 	struct list_head vec[TVN_SIZE];
 };
@@ -481,7 +484,12 @@ static inline void __run_timers(struct tvec_base *base)
 		 * Cascade timers:
 		 */
 		/*index为0表示tv1.vec没有到期的timer，将tv2等的timer进行移动*/ 
-		if (!index &&
+		if (!index && 
+			/*index为0，tv1没有到期的timer，将tv2的移到tv1
+			 *tv1.vec没有到期表示jiffies已经增加了256个，所以把
+			 *tv2.vec移到tv1.vec
+			 *同理如果tv2.vec的已经处理完了，则把tv3.vec移到到tv1.vec
+			 */
 			(!cascade(base, &base->tv2, INDEX(0))) &&
 				(!cascade(base, &base->tv3, INDEX(1))) &&
 					!cascade(base, &base->tv4, INDEX(2)))
@@ -528,6 +536,34 @@ static inline void __run_timers(struct tvec_base *base)
 	spin_unlock_irq(&base->lock);
 }
 
+static int cascade(struct tvec_base *base, struct tvec *tv, int index)
+{
+	/* cascade all the timers from tv up one level */
+	struct timer_list *timer, *tmp;
+	struct list_head tv_list;
+
+	list_replace_init(tv->vec + index, &tv_list);
+
+	/*
+	 * We are removing _all_ timers from the list, so we
+	 * don't have to detach them individually.
+	 */
+	list_for_each_entry_safe(timer, tmp, &tv_list, entry) {
+		BUG_ON(tbase_get_base(timer->base) != base);
+		/* No accounting, while moving them */
+		/*
+		 * 由于base->timer_jiffies不断增加，所以从cascade调用
+		 * __internal_add_timer函数，只会往tv1.vec中添加
+		 * 只有从add_timer等添加timer的函数中才会王tv2，tv3等中
+		 * 添加timer
+		 */
+		__internal_add_timer(base, timer);
+	}
+
+	return index;
+}
+
+
 static inline void
 detach_expired_timer(struct timer_list *timer, struct tvec_base *base)
 {
@@ -537,4 +573,6 @@ detach_expired_timer(struct timer_list *timer, struct tvec_base *base)
 	base->all_timers--;
 	(void)catchup_timer_jiffies(base);
 }
+
+
 
