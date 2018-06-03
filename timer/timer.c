@@ -117,7 +117,7 @@ void tick_handle_periodic(struct clock_event_device *dev)
 	ktime_t next = dev->next_event;
 
 	tick_periodic(cpu);
-
+	/*如果是周期模式，则直接返回*/
 	if (dev->mode != CLOCK_EVT_MODE_ONESHOT)
 		return;
 	for (;;) {
@@ -141,6 +141,122 @@ void tick_handle_periodic(struct clock_event_device *dev)
 		if (timekeeping_valid_for_hres())
 			tick_periodic(cpu);
 	}
+}
+
+void do_timer(unsigned long ticks)
+{
+	/*更新jiffise*/
+	jiffies_64 += ticks;
+	calc_global_load(ticks);
+}
+
+/*
+ * Periodic tick
+ */
+static void tick_periodic(int cpu)
+{
+	if (tick_do_timer_cpu == cpu) {
+		write_seqlock(&jiffies_lock);
+
+		/* Keep track of the next tick event */
+		tick_next_period = ktime_add(tick_next_period, tick_period);
+
+		do_timer(1);
+		write_sequnlock(&jiffies_lock);
+		update_wall_time();
+	}
+
+	update_process_times(user_mode(get_irq_regs()));
+	profile_tick(CPU_PROFILING);
+}
+
+void update_process_times(int user_tick)
+{
+	struct task_struct *p = current;
+
+	/* Note: this timer irq context must be accounted for as well. */
+	account_process_tick(p, user_tick);
+	run_local_timers();
+	rcu_check_callbacks(user_tick);
+#ifdef CONFIG_IRQ_WORK
+	if (in_irq())
+		irq_work_tick();
+#endif
+	scheduler_tick();
+	run_posix_cpu_timers(p);
+}
+
+void run_local_timers(void)
+{
+	/*高精度timer相关*/
+	hrtimer_run_queues();
+	/*启动低精度timer软中断，执行run_timer_softirq*/
+	raise_softirq(TIMER_SOFTIRQ);
+}
+
+static void run_timer_softirq(struct softirq_action *h)
+{
+	struct tvec_base *base = __this_cpu_read(tvec_bases);
+
+	hrtimer_run_pending();
+
+	if (time_after_eq(jiffies, base->timer_jiffies))
+		__run_timers(base);/*执行低精度timer*/
+}
+
+/*
+ * Called from timer softirq every jiffy, expire hrtimers:
+ *
+ * For HRT its the fall back code to run the softirq in the timer
+ * softirq context in case the hrtimer initialization failed or has
+ * not been done yet.
+ */
+void hrtimer_run_pending(void)
+{
+	/*如果hrtimer已经激活直接返回*/
+	if (hrtimer_hres_active())
+		return;
+
+	/*
+	 * This _is_ ugly: We have to check in the softirq context,
+	 * whether we can switch to highres and / or nohz mode. The
+	 * clocksource switch happens in the timer interrupt with
+	 * xtime_lock held. Notification from there only sets the
+	 * check bit in the tick_oneshot code, otherwise we might
+	 * deadlock vs. xtime_lock.
+	 */
+
+	/*hrtimer_is_hres_enabled()默认返回1*/
+	if (tick_check_oneshot_change(!hrtimer_is_hres_enabled()))
+		hrtimer_switch_to_hres();
+}
+
+/*
+ * Check, if a change happened, which makes oneshot possible.
+ *
+ * Called cyclic from the hrtimer softirq (driven by the timer
+ * softirq) allow_nohz signals, that we can switch into low-res nohz
+ * mode, because high resolution timers are disabled (either compile
+ * or runtime).
+ */
+int tick_check_oneshot_change(int allow_nohz)
+{
+	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
+
+	if (!test_and_clear_bit(0, &ts->check_clocks))
+		return 0;
+
+	if (ts->nohz_mode != NOHZ_MODE_INACTIVE)
+		return 0;
+
+	if (!timekeeping_valid_for_hres() || !tick_is_oneshot_available())
+		return 0;
+
+	if (!allow_nohz)
+		return 1;
+
+	tick_nohz_switch_to_nohz();
+	return 0;
 }
 
 
