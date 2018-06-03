@@ -140,7 +140,7 @@ Header notes:
 
 The Image must be placed text_offset bytes from a 2MB aligned base address near the start of usable system RAM and called there. Memory below that base address is currently unusable by Linux, and therefore it is strongly recommended that this location is the start of system RAM. At least image_size bytes from the start of the image must be free for use by the kernel.
 
-> image应该被放在距离起始地址 text_offset的地方，起始地址是2M对齐的，接近system RAM的开始地方。linux现在没有使用base address一下的地址，强烈建议该位置是system RAM的开始地址。至少从image开始image_size字节必须是free的可以被kenrel使用。
+> image应该被放在距离base address text_offset的地方，base address是2M对齐的，接近system RAM的开始地方。linux现在没有使用base address以下的地址，强烈建议该位置是system RAM的开始地址。至少从image开始image_size字节必须是free的可以被kenrel使用。
 
 kernel header并没有使用什么工具生成，而是直接在代码中指定的：
 

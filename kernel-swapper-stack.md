@@ -213,7 +213,7 @@ static inline struct thread_info *current_thread_info(void)
 	/**
 	 *将栈的地址按照THREAD_SIZE对齐就可以得到thread_info的指针，因为thread_info起始地址也是
 	 *THREAD_SIZE对齐的*
-	 /
+	 */
 	return (struct thread_info *)
 		(current_stack_pointer & ~(THREAD_SIZE - 1));
 }
