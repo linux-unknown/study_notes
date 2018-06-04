@@ -24,6 +24,35 @@ b	\label
 .endm
 
 
+/*
+* Interrupt handling.
+*/
+.macro	irq_handler
+adrp	x1, handle_arch_irq
+ldr x1, [x1, #:lo12:handle_arch_irq]
+mov x0, sp
+blr x1
+.endm
+
+.macro	get_thread_info, rd
+mov	\rd, sp
+and	\rd, \rd, #~(THREAD_SIZE - 1)	// top of stack
+.endm
+
+
+	/*
+	 * These are the registers used in the syscall handler, and allow us to
+	 * have in theory up to 7 arguments to a function - x0 to x6.
+	 *
+	 * x7 is reserved for the system call number in 32-bit mode.
+	 */
+	sc_nr	.req	x25 	// number of system calls
+	scno	.req	x26 	// syscall number
+	stbl	.req	x27 	// syscall table pointer
+	tsk .req	x28 	// current thread_info
+
+
+
 	.align	11
 ENTRY(vectors)
 	ventry	el1_sync_invalid		// Synchronous EL1t
@@ -59,19 +88,22 @@ END(vectors)
 
 	.align	6
 el1_irq:
+	/*保存上下文*/
 	kernel_entry 1	/*el=1*/
 	enable_dbg
 #ifdef CONFIG_TRACE_IRQFLAGS
 	bl	trace_hardirqs_off
 #endif
-
+	/*跳转到handle_arch_irq = gic_handle_irq*/
 	irq_handler
 
 #ifdef CONFIG_PREEMPT
+	/*tsk为寄存器28*/
 	get_thread_info tsk
 	ldr	w24, [tsk, #TI_PREEMPT]		// get preempt count
 	cbnz	w24, 1f				// preempt count != 0
 	ldr	x0, [tsk, #TI_FLAGS]		// get flags
+	/*如果x0的TIF_NEED_RESCHED置位，则表示需要调度*/
 	tbz	x0, #TIF_NEED_RESCHED, 1f	// needs rescheduling?
 	bl	el1_preempt
 1:
@@ -180,4 +212,74 @@ eret					// return to kernel
 mov \rd, sp
 and \rd, \rd, #~(THREAD_SIZE - 1)	// top of stack
 .endm
+
+
+
+#ifdef CONFIG_PREEMPT
+el1_preempt:
+	mov	x24, lr
+1:	bl	preempt_schedule_irq		// irq en/disable is done inside
+	ldr	x0, [tsk, #TI_FLAGS]		// get new tasks TI_FLAGS
+	tbnz	x0, #TIF_NEED_RESCHED, 1b	// needs rescheduling?
+	ret	x24
+#endif
+
+
+
+static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
+{
+	u32 irqstat, irqnr;
+	struct gic_chip_data *gic = &gic_data[0];
+	void __iomem *cpu_base = gic_data_cpu_base(gic);
+
+	do {
+		irqstat = readl_relaxed(cpu_base + GIC_CPU_INTACK);
+		irqnr = irqstat & GICC_IAR_INT_ID_MASK;
+
+		if (likely(irqnr > 15 && irqnr < 1021)) {
+			handle_domain_irq(gic->domain, irqnr, regs);
+			continue;
+		}
+		if (irqnr < 16) {
+			writel_relaxed(irqstat, cpu_base + GIC_CPU_EOI);
+#ifdef CONFIG_SMP
+			handle_IPI(irqnr, regs);
+#endif
+			continue;
+		}
+		break;
+	} while (1);
+}
+
+/*
+ * this is the entry point to schedule() from kernel preemption
+ * off of irq context.
+ * Note, that this is called and return with irqs disabled. This will
+ * protect us against recursive calling from irq.
+ */
+asmlinkage __visible void __sched preempt_schedule_irq(void)
+{
+	enum ctx_state prev_state;
+
+	/* Catch callers which need to be fixed */
+	BUG_ON(preempt_count() || !irqs_disabled());
+
+	prev_state = exception_enter();
+
+	do {
+		__preempt_count_add(PREEMPT_ACTIVE);
+		local_irq_enable();
+		__schedule();
+		local_irq_disable();
+		__preempt_count_sub(PREEMPT_ACTIVE);
+
+		/*
+		 * Check again in case we missed a preemption opportunity
+		 * between schedule and now.
+		 */
+		barrier();
+	} while (need_resched());
+
+	exception_exit(prev_state);
+}
 
