@@ -224,6 +224,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
 
 
 ENTRY(cpu_switch_to)
+	/*x0为prev，x1为next*/
 	/* x8为prev.thread.cpu_context的指针*/
 	add	x8, x0, #THREAD_CPU_CONTEXT   	/* DEFINE(THREAD_CPU_CONTEXT,	offsetof(struct task_struct, thread.cpu_context));*/
 	mov	x9, sp
@@ -236,8 +237,12 @@ ENTRY(cpu_switch_to)
 	stp	x23, x24, [x8], #16
 	stp	x25, x26, [x8], #16
 	stp	x27, x28, [x8], #16
-	stp	x29, x9, [x8], #16
-	str	lr, [x8] /*lr的值为返回调用cpu_switch_to函数的值*/
+	stp	x29, x9, [x8], #16	/*x29:fp, x9:sp,lr:pc*/
+	/*
+	 *lr的值为返回调用cpu_switch_to函数的值
+	 *即，执行return last
+	 */
+	str	lr, [x8] 
 	/*上面的代码把寄存器值存放到prev_task.thread.cpu_context中*/
 
 	/* x8为next.thread.cpu_context的指针*/
@@ -249,7 +254,8 @@ ENTRY(cpu_switch_to)
 	ldp	x25, x26, [x8], #16
 	ldp	x27, x28, [x8], #16
 	ldp	x29, x9, [x8], #16
-	ldr	lr, [x8]/* lr的值为ret_from_fork */
+	/* 对于刚创建的进程，lr的值为ret_from_fork ，已有的进程lr的值为return last的值*/
+	ldr	lr, [x8]
 	mov	sp, x9/*x9 为sp的值*/
 	ret /*ret默认会跳转到x30寄存器（即lr寄存器）的值*/
 ENDPROC(cpu_switch_to)
@@ -262,7 +268,10 @@ ENTRY(ret_from_fork)
 	/* 如果x19为0，则跳转到1f lable，kernel thread x19不为0 */
 	cbz	x19, 1f				// not a kernel thread
 	mov	x0, x20				/*x20 为栈大小*/
-	blr	x19	/*跳转到x19的地址，并且x30 = pc + 4，即下一条之类的地址，如果该内核线程推出的时候，则会跳转到get_thread_info*/
+	/*跳转到x19的地址，并且x30 = pc + 4，即下一条之类的地址，
+	 *如果该内核线程推出的时候，则会跳转到get_thread_info
+	 */
+	blr	x19	
 1:	get_thread_info tsk
 	b	ret_to_user
 ENDPROC(ret_from_fork)

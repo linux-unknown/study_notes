@@ -140,7 +140,7 @@ stp x24, x25, [sp, #16 * 12]
 stp x26, x27, [sp, #16 * 13]
 stp x28, x29, [sp, #16 * 14]
 
-.if \el == 0
+.if \el == 0				//同级别el=1
 mrs x21, sp_el0
 get_thread_info tsk 		// Ensure MDSCR_EL1.SS is clear,
 ldr x19, [tsk, #TI_FLAGS]		// since we can unmask debug
@@ -155,8 +155,10 @@ mrs x23, spsr_el1
  *将lr和x21保存到struct pt_regs结构体的reg[30]和reg[31],  
  *DEFINE(S_LR,			offsetof(struct pt_regs, regs[30]));
  */
-stp lr, x21, [sp, #S_LR]	
-stp x22, x23, [sp, #S_PC]	/*将x22，异常返回地址，和x23，cpsr值，保存到 pt_regs的pc和cpsr中*/
+stp lr, x21, [sp, #S_LR]
+
+/*将x22，异常返回地址elr_el1，和x23，cpsr值，保存到 pt_regs的pc和cpsr中*/
+stp x22, x23, [sp, #S_PC]	
 
 /*
  * Set syscallno to -1 by default (overridden later if real syscall).
@@ -176,8 +178,9 @@ str x21, [sp, #S_SYSCALLNO]
 .endm
 
 .macro	kernel_exit, el, ret = 0
+/*在kernel enter时将elr_el1,spsr_el1保存到了 pt_regs的pc和cpsr中*/
 ldp x21, x22, [sp, #S_PC]		// load ELR, SPSR
-.if \el == 0
+.if \el == 0					//同级别的el=1
 ct_user_enter
 ldr x23, [sp, #S_SP]		// load return stack pointer
 msr sp_el0, x23
@@ -251,6 +254,66 @@ static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
 	} while (1);
 }
 
+static inline int handle_domain_irq(struct irq_domain *domain,
+				    unsigned int hwirq, struct pt_regs *regs)
+{
+	return __handle_domain_irq(domain, hwirq, true, regs);
+}
+
+
+int __handle_domain_irq(struct irq_domain *domain, unsigned int hwirq,
+			bool lookup, struct pt_regs *regs)
+{
+	struct pt_regs *old_regs = set_irq_regs(regs);
+	unsigned int irq = hwirq;
+	int ret = 0;
+
+	irq_enter();
+
+#ifdef CONFIG_IRQ_DOMAIN
+	if (lookup)
+		irq = irq_find_mapping(domain, hwirq);
+#endif
+
+	/*
+	 * Some hardware gives randomly wrong interrupts.  Rather
+	 * than crashing, do something sensible.
+	 */
+	if (unlikely(!irq || irq >= nr_irqs)) {
+		ack_bad_irq(irq);
+		ret = -EINVAL;
+	} else {
+		generic_handle_irq(irq);
+	}
+
+	irq_exit();
+	set_irq_regs(old_regs);
+	return ret;
+}
+
+
+/*
+ * Exit an interrupt context. Process softirqs if needed and possible:
+ */
+void irq_exit(void)
+{
+#ifndef __ARCH_IRQ_EXIT_IRQS_DISABLED
+	local_irq_disable();
+#else
+	WARN_ON_ONCE(!irqs_disabled());
+#endif
+
+	account_irq_exit_time(current);
+	preempt_count_sub(HARDIRQ_OFFSET);
+	if (!in_interrupt() && local_softirq_pending())
+		invoke_softirq();/*会处理软中断*/
+
+	tick_irq_exit();
+	rcu_irq_exit();
+	trace_hardirq_exit(); /* must be last! */
+}
+
+
 /*
  * this is the entry point to schedule() from kernel preemption
  * off of irq context.
@@ -282,4 +345,5 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 
 	exception_exit(prev_state);
 }
+
 

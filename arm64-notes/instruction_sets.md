@@ -1,5 +1,7 @@
 # aarch64 常用指令
 
+[TOC]
+
 ###  STP
 
 >Store Pair of SIMD&FP registers. This instruction stores a pair of SIMD&FP registers to memory. The address used for the store is calculated from a base register value and an immediate offset
@@ -91,3 +93,22 @@ CBNZ \<Xt\>, \<label\>
 TBZ \<R\>\<t\>, #\<imm\>, \<label\>
 
 如果寄存器t和imm相与为0，则跳转到label
+
+
+
+### MSR
+
+
+
+msr elr_el1, x21
+
+将x21寄存器写入elr_el1
+
+
+
+### MRS
+
+mrs x22, elr_el1
+
+将elr_el1保存到x22寄存器
+
