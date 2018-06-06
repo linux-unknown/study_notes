@@ -87,6 +87,25 @@ END(vectors)
 
 
 	.align	6
+el0_irq:
+	kernel_entry 0
+el0_irq_naked:
+	enable_dbg
+#ifdef CONFIG_TRACE_IRQFLAGS
+	bl	trace_hardirqs_off
+#endif
+
+	ct_user_exit
+	irq_handler
+
+#ifdef CONFIG_TRACE_IRQFLAGS
+	bl	trace_hardirqs_on
+#endif
+	b	ret_to_user
+ENDPROC(el0_irq)
+
+
+	.align	6
 el1_irq:
 	/*保存上下文*/
 	kernel_entry 1	/*el=1*/
@@ -345,5 +364,6 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 
 	exception_exit(prev_state);
 }
+
 
 
