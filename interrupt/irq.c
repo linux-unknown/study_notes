@@ -40,6 +40,18 @@ and	\rd, \rd, #~(THREAD_SIZE - 1)	// top of stack
 .endm
 
 
+/*
+* Enable and disable debug exceptions.
+*/
+.macro	disable_dbg
+msr daifset, #8
+.endm
+
+.macro	enable_dbg
+msr daifclr, #8
+.endm
+
+
 	/*
 	 * These are the registers used in the syscall handler, and allow us to
 	 * have in theory up to 7 arguments to a function - x0 to x6.
@@ -187,6 +199,9 @@ mvn x21, xzr
 str x21, [sp, #S_SYSCALLNO]
 .endif
 
+.endm
+
+
 /*
  * Registers that may be useful after this macro is invoked:
  *
@@ -194,7 +209,7 @@ str x21, [sp, #S_SYSCALLNO]
  * x22 - aborted PC
  * x23 - aborted PSTATE
 */
-.endm
+
 
 .macro	kernel_exit, el, ret = 0
 /*在kernel enter时将elr_el1,spsr_el1保存到了 pt_regs的pc和cpsr中*/
