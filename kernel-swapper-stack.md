@@ -193,7 +193,7 @@ ENDPROC(__mmap_switched)
 
 ### tatk_struct和thread_info关系
 
-![kernel-swapper-stack](F:\ARM\arm v8\study_notes\kernel-swapper-stack.jpg)
+![kernel-swapper-stack](.\kernel-swapper-stack.jpg)
 
 ### current
 
