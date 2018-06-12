@@ -136,14 +136,15 @@ _start:
  * This PSCI implementation requires EL3. Without EL3 we'll only boot the
  * primary cpu, all others will be trapped in an infinite loop.
  */
- /*PSCI的实现需要EL3，如果没有EL3，在只boot primary CPU，其他的cpu将无限循环*/
+ /*PSCI的实现需要EL3，如果没有EL3，只boot primary CPU，其他的cpu将无限循环*/
 start_no_el3:
 	mrs	x0, mpidr_el1		/*读取cpu id*/
 	ldr	x1, =MPIDR_ID_BITS	/*定义cpu id的bit位*/
 	and	x0, x0, x1
 	bl	find_logical_id		/*定义在psci.S*/
 	cbz	x0, start_cpu0		/*如果x0寄存器等于0，则跳转调start_cpu0*/
-spin_dead:					/*primary cpu的logic id为0，如果x0不为0则表示为其他的cpu，那么无限循环*/
+/*primary cpu的logic id为0，如果x0不为0则表示为其他的cpu，那么无限循环*/
+spin_dead:
 	wfe
 	b	spin_dead
 ```
@@ -189,7 +190,7 @@ start_cpu0:
 	mov	x2, xzr
 	mov	x3, xzr
 
-	bl	ns_init_system /*non-secure初始化，主要是初始化串口和CLCD，不用关系*/
+	bl	ns_init_system /*non-secure初始化，主要是初始化串口和CLCD，不用关心*/
 	/*dtb和kernel都是model.lds中定义的*/
 	ldr	x0, =dtb
 	b	kernel /*跳转到kernel*/
@@ -377,7 +378,7 @@ switch_to_idmap:
 	isb
 
 	adr	x0, pgtable_l1 /*虚拟地址=物理地址的映射*/
-	msr	ttbr0_el3, x0 /*初始化el3页表*/
+	msr	ttbr0_el3, x0 /*初始化el3页表基地址*/
 	
 	ldr	x0, =MAIR_ATTR
 	msr	mair_el3, x0
@@ -417,14 +418,14 @@ spin:
 	add	x1, x1, x0, lsl #3   /*x0为core id*/
 
 	/**
-	*如果不是core 0则会在这里一直循环，在core 0起来后，会把branch_table地址对应core的地址处写入core	*需要执行的地址
-	*/
+	 *如果不是core 0则会在这里一直循环，在core 0起来后，会把branch_table地址对应core的地址处写入	  *core 0需要执行的地址
+	 */
 1:	wfe
 	ldr	x2, [x1]
 	/*
-	*比较对应core logic id中的branch_table的入口地址是否-1，core 0会初始化对应的入口地址为	
-	*start_cpu0
-	*/
+	 *比较对应core logic id中的branch_table的入口地址是否-1，core 0会初始化对应的入口地址为	
+	 *start_cpu0
+	 */
 	cmp	x2, x3	
 	b.eq	1b
 
@@ -805,7 +806,7 @@ vector:
 	......
 ```
 
-```
+```assembly
 psci_call64:
 	/*在执行smc命令的时候，x0=smc functions id，x1为cpu id， x2为跳转地址*/
 	ldr	x7, =PSCI_CPU_OFF
@@ -820,13 +821,14 @@ psci_call64:
 	eret
 ```
 
-```
+```assembly
 /*
  * x1 - target cpu
  * x2 - address
  */
 psci_cpu_on:
-	mov	x15, x30 /*保存有kernel中的返回地址*/
+	/*保存x30的值，x30保存有kernel调用__invoke_psci_fn_smc的返回地址*/
+	mov	x15, x30
 	mov	x14, x2
 	mov	x0, x1
 
@@ -860,10 +862,11 @@ psci_cpu_on:
 
 1:	mov	x0, #PSCI_RET_DENIED
 	mov	x30, x15
+	/*elr_el3保存有调用smc的下一条之前的地址，spsr_el3保存有调用smc之前的PSTATE状态*/
 	eret
 ```
 #### 其他core的执行过程
-```
+```assembly
 1:	wfe
 	ldr	x2, [x1]
 	/*
