@@ -1,5 +1,7 @@
 # arm64 smp boot
 
+[TOC]
+
 ## Secondary CPU
 
 在linux smp启动的过程中，一般会先由一个CPU boot起来，该CPU称作boot cpu。boot cpu会启动其他的cpu，其他cpu统称为secondary cpu
@@ -1007,7 +1009,7 @@ ENDPROC(secondary_startup)
 
 #### __secondary_switched
 
-```
+```assembly
 ENTRY(__secondary_switched)
 	ldr	x0, [x21]			// get secondary_data.stack
 	mov	sp, x0
@@ -1089,7 +1091,6 @@ void cpu_startup_entry(enum cpuhp_state state)
 	 * make this generic (arm and sh have never invoked the canary
 	 * init for the non boot cpus!). Will be fixed in 3.11
 	 */
-#endif
 	arch_cpu_idle_prepare();
 	cpu_idle_loop();/*执行idle进程*/
 }
