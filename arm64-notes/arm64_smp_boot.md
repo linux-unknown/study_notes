@@ -13,7 +13,7 @@ secondary cpu启动有几种方法：
 
 ### boot-wrapper-aarch64 secondary cpu处理
 
-boot-wrapper-aarch64即座位boot loader，同时在el3中实现了psci功能
+boot-wrapper-aarch64即作为boot loader，同时在el3中实现了psci功能
 
 ```assembly
 	mrs	x0, mpidr_el1
@@ -46,7 +46,7 @@ spin:
 	 * 比较对应core logic id中的branch_table的入口地址是否-1，core 0会初始化对应的入口地址为	
 	 * start_cpu0，secondary core为secondary_entry
 	 */
-	cmp	x2, x3	
+	cmp	x2, x3	/*x3 = ADDR_INVALID*/
 	b.eq	1b
 
 	ldr	x0, =SCTLR_EL2_RESET   /*(3 << 28 | 3 << 22 | 1 << 18 | 1 << 16 | 1 << 11 | 3 << 4)*/
@@ -672,23 +672,12 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen)
 
 
 	ret = smpboot_create_threads(cpu);
-	if (ret)
-		goto out;
 
 	/*调用回调函数*/
 	ret = __cpu_notify(CPU_UP_PREPARE | mod, hcpu, -1, &nr_calls);
-	if (ret) {
-		nr_calls--;
-		pr_warn("%s: attempt to bring up CPU %u failed\n",
-			__func__, cpu);
-		goto out_notify;
-	}
 
 	/* Arch-specific enabling code. */
 	ret = __cpu_up(cpu, idle);
-	if (ret != 0)
-		goto out_notify;
-	BUG_ON(!cpu_online(cpu));
 
 	/* Wake the per cpu threads */
 	smpboot_unpark_threads(cpu);
@@ -707,3 +696,403 @@ out:
 
 ```
 
+#### smpboot_create_threads
+
+```c
+int smpboot_create_threads(unsigned int cpu)
+{
+	struct smp_hotplug_thread *cur;
+	int ret = 0;
+
+	mutex_lock(&smpboot_threads_lock);
+	/**
+	 * 执行smpboot_register_percpu_thread函数，会向hotplug_threads链表上挂载元素
+	 * 在这里重新执行，应该是之前执行的时候只有online cpu只有boot cpu，现在对每一个
+	 * cpu进行注册
+	 */
+	list_for_each_entry(cur, &hotplug_threads, list) {
+		ret = __smpboot_create_thread(cur, cpu);
+	}
+	mutex_unlock(&smpboot_threads_lock);
+	return ret;
+}
+
+```
+
+__smpboot_create_thread 会创建一个线程，该线程的执行函数为smpboot_thread_fn，线程的名称有执行smpboot_register_percpu_thread函数执行是传递的参数决定。
+
+#### smpboot_thread_fn
+
+smpboot_thread_fn会根据传递的不同参数，执行不同的动作,进而执行ht中不同的函数
+
+```c
+static int smpboot_thread_fn(void *data)
+{
+	struct smpboot_thread_data *td = data;
+	struct smp_hotplug_thread *ht = td->ht;
+
+	while (1) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		preempt_disable();
+		if (kthread_should_stop()) {
+			__set_current_state(TASK_RUNNING);
+			preempt_enable();
+			if (ht->cleanup)
+				ht->cleanup(td->cpu, cpu_online(td->cpu));
+			kfree(td);
+			return 0;
+		}
+
+		if (kthread_should_park()) {
+			__set_current_state(TASK_RUNNING);
+			preempt_enable();
+			if (ht->park && td->status == HP_THREAD_ACTIVE) {
+				BUG_ON(td->cpu != smp_processor_id());
+				ht->park(td->cpu);
+				td->status = HP_THREAD_PARKED;
+			}
+			kthread_parkme();
+			/* We might have been woken for stop */
+			continue;
+		}
+
+		BUG_ON(td->cpu != smp_processor_id());
+
+		/* Check for state change setup */
+		switch (td->status) {
+		case HP_THREAD_NONE:
+			__set_current_state(TASK_RUNNING);
+			preempt_enable();
+			if (ht->setup)
+				ht->setup(td->cpu);
+			td->status = HP_THREAD_ACTIVE;
+			continue;
+
+		case HP_THREAD_PARKED:
+			__set_current_state(TASK_RUNNING);
+			preempt_enable();
+			if (ht->unpark)
+				ht->unpark(td->cpu);
+			td->status = HP_THREAD_ACTIVE;
+			continue;
+		}
+
+		if (!ht->thread_should_run(td->cpu)) {
+			preempt_enable_no_resched();
+			schedule();
+		} else {
+			__set_current_state(TASK_RUNNING);
+			preempt_enable();
+			ht->thread_fn(td->cpu);
+		}
+	}
+}
+
+```
+
+#### cpu_stop_init
+
+```c
+static struct smp_hotplug_thread cpu_stop_threads = {
+	.store			= &cpu_stopper_task,
+	.thread_should_run	= cpu_stop_should_run,
+	.thread_fn		= cpu_stopper_thread,
+	.thread_comm		= "migration/%u",
+	.create			= cpu_stop_create,
+	.setup			= cpu_stop_unpark,
+	.park			= cpu_stop_park,
+	.pre_unpark		= cpu_stop_unpark,
+	.selfparking		= true,
+};
+
+static int __init cpu_stop_init(void)
+{
+	unsigned int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct cpu_stopper *stopper = &per_cpu(cpu_stopper, cpu);
+
+		spin_lock_init(&stopper->lock);
+		INIT_LIST_HEAD(&stopper->works);
+	}
+
+	BUG_ON(smpboot_register_percpu_thread(&cpu_stop_threads));
+	stop_machine_initialized = true;
+	return 0;
+}
+early_initcall(cpu_stop_init);
+```
+
+#### __cpu_up
+
+```c
+int __cpu_up(unsigned int cpu, struct task_struct *idle)
+{
+	int ret;
+
+	/*
+	 * We need to tell the secondary core where to find its stack and the
+	 * page tables. 设置secondary cpu的栈地址
+	 */
+	secondary_data.stack = task_stack_page(idle) + THREAD_START_SP;
+	__flush_dcache_area(&secondary_data, sizeof(secondary_data));
+
+	/*
+	 * Now bring the CPU into our world.
+	 */
+	ret = boot_secondary(cpu, idle);
+	if (ret == 0) {
+		/*
+		 * CPU was successfully started, wait for it to come online or
+		 * time out.
+		 */
+		wait_for_completion_timeout(&cpu_running, msecs_to_jiffies(1000));
+		}
+	} else {
+		pr_err("CPU%u: failed to boot: %d\n", cpu, ret);
+	}
+
+	secondary_data.stack = NULL;
+
+	return ret;
+}
+
+```
+
+#### boot_secondary
+
+```c
+static int boot_secondary(unsigned int cpu, struct task_struct *idle)
+{
+	if (cpu_ops[cpu]->cpu_boot)
+		/*调用cpu_psci_cpu_boot*/
+		return cpu_ops[cpu]->cpu_boot(cpu);
+
+	return -EOPNOTSUPP;
+}
+```
+
+cou_ops为cpu_psci_ops，cpu_booot函数为cpu_psci_cpu_boot。cpu_psci_cpu_boot函数需要传递cpu id和secondary cpu入口地址的物理地址
+
+```
+psci_ops.cpu_on(cpu_logical_map(cpu), __pa(secondary_entry));
+```
+
+psci_cpu_on-->invoke_psci_fn,invoke_psci_fn函数会跳转到el3或这el2，退跳转到对应的异常向量表中，对于boot wrapper是psci_call64
+
+#### psci_call64
+
+```assembly
+psci_call64:
+	/*在执行smc命令的时候，x0=smc functions id，x1为cpu id， x2为跳转地址*/
+	ldr	x7, =PSCI_CPU_OFF
+	cmp	x0, x7
+	b.eq	psci_cpu_off
+
+	ldr	x7, =PSCI_CPU_ON /*我们只分析PSCI_CPU_ON*/
+	cmp	x0, x7
+	b.eq	psci_cpu_on
+
+	mov	x0, PSCI_RET_NOT_IMPL
+	eret
+```
+
+#### psci_cpu_on
+
+```assembly
+*
+ * x1 - target cpu
+ * x2 - address
+ */
+psci_cpu_on:
+	/*保存x30的值，x30保存有kernel调用__invoke_psci_fn_smc的返回地址*/
+	mov	x15, x30
+	mov	x14, x2
+	mov	x0, x1
+
+	bl	find_logical_id
+	cmp	x0, #-1
+	b.eq	1f
+
+	adr	x3, branch_table
+	add	x3, x3, x0, lsl #3 /*x0为cpu的ID*/
+
+	ldr	x4, =ADDR_INVALID
+
+	ldxr	x5, [x3]
+	cmp	x4, x5			/*初始都被初始化为-1*/
+	b.ne	1f			/*如果不等于则表示已经写入了*/
+
+	/*
+	*把x14即secondary_entry的物理地址写入branch_table对应的core id中
+	*其他的cpu core在等待event事件，等到后会检查branch_table中对应core id的跳转地址是否为-1
+	*如果不是-1，字执行和core 0一样的动作，陷入EL2然后执行el2_trampoline，
+	*/
+	stxr	w4, x14, [x3] 
+	cbnz	w4, 1f
+
+	dsb	ishst
+	sev					/*发送event唤醒其他cpu core*/
+
+	mov	x0, #PSCI_RET_SUCCESS
+	mov	x30, x15
+	eret	/*返回异常*/
+
+1:	mov	x0, #PSCI_RET_DENIED
+	mov	x30, x15
+	/*elr_el3保存有调用smc的下一条之前的地址，spsr_el3保存有调用smc之前的PSTATE状态*/
+	eret
+```
+
+#### secondary cpu boot
+
+在boot  wrapper中，secondary cpu会一直循环读取branh_table的值，如果不为ADDR_INVALID则跳转到该地址执行。
+
+```assembly
+adr	x1, branch_table
+	mov	x3, #ADDR_INVALID
+	add	x1, x1, x0, lsl #3   /*x0为core id*/
+	/**
+	 * 如果不是core 0则会在这里一直循环，在core 0起来后，会在branch_table对应core的地址处写入
+	 * core x需要执行的地址
+	 */
+1:	wfe
+	ldr	x2, [x1]
+	/*
+	 * 比较对应core logic id中的branch_table的入口地址是否-1，core 0会初始化对应的入口地址为	
+	 * start_cpu0，secondary core为secondary_entry
+	 */
+	cmp	x2, x3	/*x3 = ADDR_INVALID*/
+	b.eq	1b	/*如果不等于ADDR_INVALID，则继续执行，跳转到branch_table中对应的地址*/
+```
+
+#### secondary_entry
+
+```assembly
+ENTRY(secondary_entry)
+	bl	el2_setup			// Drop to EL1
+	bl	__calc_phys_offset		// x24=PHYS_OFFSET, x28=PHYS_OFFSET-PAGE_OFFSET
+	bl	set_cpu_boot_mode_flag
+	b	secondary_startup
+ENDPROC(secondary_entry)
+```
+
+#### secondary_startup
+
+```assembly
+ENTRY(secondary_startup)
+	/*
+	 * Common entry point for secondary CPUs.
+	 */
+	mrs	x22, midr_el1			// x22=cpuid
+	mov	x0, x22
+	bl	lookup_processor_type
+
+	/*x23 为cpu_table的指针*/
+	mov	x23, x0				// x23=current cpu_table
+	cbz	x23, __error_p			// invalid processor (x23=0)?
+
+	/*x28为物理地址和虚拟地址的偏移*/
+	pgtbl	x25, x26, x28			// x25=TTBR0, x26=TTBR1
+	ldr	x12, [x23, #CPU_INFO_SETUP]
+	add	x12, x12, x28			// __virt_to_phys
+	/*调用__cpu_setup*/
+	blr	x12				// initialise processor
+
+	ldr	x21, =secondary_data
+	ldr	x27, =__secondary_switched	// address to jump to after enabling the MMU
+	b	__enable_mmu
+ENDPROC(secondary_startup)
+```
+
+#### __secondary_switched
+
+```
+ENTRY(__secondary_switched)
+	ldr	x0, [x21]			// get secondary_data.stack
+	mov	sp, x0
+	mov	x29, #0
+	b	secondary_start_kernel
+ENDPROC(__secondary_switched)
+```
+
+#### secondary_start_kernel
+
+```c
+asmlinkage void secondary_start_kernel(void)
+{
+	struct mm_struct *mm = &init_mm;
+	unsigned int cpu = smp_processor_id();
+
+	/*
+	 * All kernel threads share the same mm context; grab a
+	 * reference and switch to it.
+	 */
+	atomic_inc(&mm->mm_count);
+	current->active_mm = mm;
+	cpumask_set_cpu(cpu, mm_cpumask(mm));
+
+	set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
+	printk("CPU%u: Booted secondary processor\n", cpu);
+
+	/*
+	 * TTBR0 is only used for the identity mapping at this stage. Make it
+	 * point to zero page to avoid speculatively fetching new entries.
+	 */
+	cpu_set_reserved_ttbr0();
+	flush_tlb_all();
+
+	preempt_disable();
+	trace_hardirqs_off();
+
+	if (cpu_ops[cpu]->cpu_postboot)
+		cpu_ops[cpu]->cpu_postboot();
+
+	/*
+	 * Log the CPU info before it is marked online and might get read.
+	 */
+	cpuinfo_store_cpu();
+
+	/*
+	 * Enable GIC and timers.
+	 */
+	notify_cpu_starting(cpu);
+
+	smp_store_cpu_info(cpu);
+
+	/*
+	 * OK, now it's safe to let the boot CPU continue.  Wait for
+	 * the CPU migration code to notice that the CPU is online
+	 * before we continue.
+	 */
+	set_cpu_online(cpu, true);
+	complete(&cpu_running);
+
+	local_dbg_enable();
+	local_irq_enable();
+	local_async_enable();
+
+	/*
+	 * OK, it's off to the idle thread for us
+	 */
+	cpu_startup_entry(CPUHP_ONLINE);
+}
+```
+
+#### cpu_startup_entry
+
+```c
+void cpu_startup_entry(enum cpuhp_state state)
+{
+	/*
+	 * This #ifdef needs to die, but it's too late in the cycle to
+	 * make this generic (arm and sh have never invoked the canary
+	 * init for the non boot cpus!). Will be fixed in 3.11
+	 */
+#endif
+	arch_cpu_idle_prepare();
+	cpu_idle_loop();/*执行idle进程*/
+}
+```
+
+所以在kernel启动的过程中是不会出现驱动并行加载的，驱动的加载在kernel_init进程中，多核之间的负载均衡是以进程（这里描述不是很准确，应该是调度实体）为最单位的。secondary cpu只会执行其他的进程。
