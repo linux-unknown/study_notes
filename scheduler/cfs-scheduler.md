@@ -128,7 +128,7 @@ sched_slice函数的时候，task不一定在运行。
 
 **slice = slice \* se->load.weight / cfs_rq->load**
 
-**slice为该se的weight占run queue load的比例，然后乘以中的slice时间**
+**slice为该se的weight占run queue load的比例，然后乘以总的slice时间**
 
 ### __sched_period
 
