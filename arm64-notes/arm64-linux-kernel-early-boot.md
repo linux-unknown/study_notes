@@ -352,7 +352,8 @@ __calc_phys_offset:
 	ldp	x1, x2, [x0]	//从x0读取两个64bit值到x1，和x2
 	/*
 	 * x1为1标号对应的虚拟地址，x0为1标号对应的物理地址。
-	 * x0 - x1 物理地址和虚拟地址的一个offset
+	 * x0 - x1 物理地址和虚拟地址的一个offset，应为内核空间NORMAL zone是线性映射的，
+	 * 所以该offset对整个地址空间都适用
 	 * x2为kernel image的虚拟地址，x2 + x28就可以计算出，kernel image被加载的物理地址。
 	 */
 	sub	x28, x0, x1		// x28 = PHYS_OFFSET - PAGE_OFFSET 
