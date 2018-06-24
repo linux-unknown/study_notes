@@ -7,8 +7,8 @@
 **kernel的入口地址由链接脚本制定：** 
 OUTPUT_ARCH(aarch64)
 ENTRY(_text)
-ENTRY(\_text)表示程序入口的标号为_text,该标号可以是链接脚本中定义的也可以是代码中定义的。本例中是链接脚本中定义的，所以arm64 kernel的第一调指令执行的指令是\_text
-程序入口的地址在连接脚本vmlinux.lds中制定：
+ENTRY(\_text)表示程序入口的标号为_text，该标号可以是链接脚本中定义的也可以是代码中定义的。本例中是链接脚本中定义的，所以arm64 kernel的第一个指令执行的指令是\_text处的指令。
+程序入口的地址在连接脚本vmlinux.lds中指定：
 ```c
 SECTIONS
 {
@@ -22,7 +22,7 @@ SECTIONS
 ｝
 ```
 
-第4行中的“.”被成为 location counter。. = PAGE_OFFSET + TEXT_OFFSET;表示将location counter赋值为PAGE_OFFSET + TEXT_OFFSET，后续代码链接的地址从该地址开始。
+第4行中的“.”被称为 location counter。. = PAGE_OFFSET + TEXT_OFFSET；表示将location counter赋值为PAGE_OFFSET + TEXT_OFFSET，后续代码链接的地址从该地址开始。
 
 ```c
 #define VA_BITS			(CONFIG_ARM64_VA_BITS)
@@ -94,7 +94,7 @@ ffff800000080010:       00eb5000        .word   0x00eb5000
 根据Documentation/arm64/booting.txt
 
  The decompressed kernel image contains a 64-byte header as follows:
-```
+```c
    u32 code0;                    /* Executable code */
    u32 code1;                    /* Executable code */
    u64 text_offset;              /* Image load offset, little endian */
@@ -343,7 +343,7 @@ ENDPROC(el2_setup)
 
 #### __calc_phys_offset
 
-```
+```assembly
 /*
  * Calculate the start of physical memory.
  */
@@ -382,7 +382,7 @@ ENDPROC(__calc_phys_offset)
 
 #### set_cpu_boot_mode_flag
 
-```
+```assembly
 /*
  * Sets the __boot_cpu_mode flag depending on the CPU boot mode passed
  * in x20. See arch/arm64/include/asm/virt.h for more info.
@@ -846,7 +846,7 @@ create_block_map x0, x7, x3, x5, x6
 
 页表映射如下图：
 
-![页表在内存中的布局](swapper_pg_dir_mmu_table.jpg)
+![页表在内存中的布局](./swapper_pg_dir_mmu_table.jpg)
 
 #### __cpu_setup
 
