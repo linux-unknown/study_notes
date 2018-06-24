@@ -351,12 +351,12 @@ __calc_phys_offset:
 	adr	x0, 1f			//使用adr指令获得1 lable当前的物理地址
 	ldp	x1, x2, [x0]	//从x0读取两个64bit值到x1，和x2
 	/*
-    *x1为1标号对应的虚拟地址，x0为1 标号对应的物理地址。
-    *x0 - x1 物理地址和虚拟地址的一个offset
-    *x2为kernel image的虚拟地址，x2 + x29就可以计算出，kernel image被加载的物理地址。
-    */
+	 * x1为1标号对应的虚拟地址，x0为1标号对应的物理地址。
+	 * x0 - x1 物理地址和虚拟地址的一个offset
+	 * x2为kernel image的虚拟地址，x2 + x28就可以计算出，kernel image被加载的物理地址。
+	 */
 	sub	x28, x0, x1		// x28 = PHYS_OFFSET - PAGE_OFFSET 
-	add	x24, x2, x28	// x24 = PHYS_OFFSET
+	add	x24, x2, x28	// x24 = PHYS_OFFSET,
 	ret
 ENDPROC(__calc_phys_offset)
 
