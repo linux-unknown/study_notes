@@ -584,7 +584,7 @@ account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 ### place_entity
 
-```c 
+```c
 static void
 place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 {
@@ -612,7 +612,7 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 		/*vruntime减去thresh*/
 		vruntime -= thresh;
 	}
-	
+
 	/* ensure we never gain time by being placed backwards. */
     /*将se->vruntime, vruntime较大的赋值为se->vruntime，可以看到入队的se的runtime最小
      *也为cfs_rq->min_vruntime - thresh
