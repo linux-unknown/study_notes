@@ -238,7 +238,7 @@ static void __sched __schedule(void)
 }
 ```
 
-### __schedule注释：
+### __schedule注释
 
 __schedule() is the main scheduler function.
 
@@ -318,13 +318,17 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	 */
 	if (!mm) {
 		next->active_mm = oldmm;
-		atomic_inc(&oldmm->mm_count);
+		atomic_inc(&oldmm->mm_count);/*增加引用计数，在什么时候减少*/
 		enter_lazy_tlb(oldmm, next);
 	} else
 		switch_mm(oldmm, mm, next);
 
-	if (!prev->mm) {
+	if (!prev->mm) {/*表示是kernel 线程*/
 		prev->active_mm = NULL;
+        /*
+         * 如果之前的也是kernel线程，则将之前的mm保存到run qeue中
+         * 如果是用户进程之间切换，rq->prev_mm为NULL
+         */
 		rq->prev_mm = oldmm;
 	}
 	/*
@@ -346,10 +350,8 @@ context_switch(struct rq *rq, struct task_struct *prev,
 ###  switch_mm
 ```c
 /*
- * This is the actual mm switch as far as the scheduler
- * is concerned.  No registers are touched.  We avoid
- * calling the CPU specific function when the mm hasn't
- * actually changed.
+ * This is the actual mm switch as far as the scheduler is concerned.  No registers are
+ * touched.  We avoid calling the CPU specific function when the mm hasn't actually changed.
  */
 static inline void
 switch_mm(struct mm_struct *prev, struct mm_struct *next, struct task_struct *tsk)
@@ -372,7 +374,7 @@ switch_mm(struct mm_struct *prev, struct mm_struct *next, struct task_struct *ts
 }
 ```
 
-### check_and_switch_context
+#### check_and_switch_context
 
 ```c
 static inline void check_and_switch_context(struct mm_struct *mm,
@@ -385,9 +387,12 @@ static inline void check_and_switch_context(struct mm_struct *mm,
 	 */
 	cpu_set_reserved_ttbr0();
 	/* 
-	 * context.id没有溢出，直接切换mm 
-	 * cpu_last_asid为上一次分配的context.id，MAX_ASID_BITS为16。armv8 asid为16bit即硬件
-	 * 支持的asid为2^16 -1=65536，如果
+	 * cpu_last_asid被初始化为ASID_FIRST_VERSION,ASID_FIRST_VERSION = (1 << MAX_ASID_BITS)
+	 * 然后cpu_last_asid会加1，所以正常的context.id都会大于ASID_FIRST_VERSION，if表达式为false
+	 * 则mm->context.id为0，新的进程会初始化为0，或者mm->context.id小于ASID_FIRST_VERSION，这个
+	 * 不可能，或者mm->context.id最高位的1和cpu_last_asid最高位的1不一样，这也就是说cpu_last_asid
+	 * 自增已经超过了2^16 - 1,表示意见ASID已经分配完。则需要重新分配ASID，也意味着要flush tlb
+	 * 综上，只有mm->context.id为0才会走到该if路径。
 	 */
 	if (!((mm->context.id ^ cpu_last_asid) >> MAX_ASID_BITS))
 		/*
@@ -401,18 +406,23 @@ static inline void check_and_switch_context(struct mm_struct *mm,
 		 * Defer the new ASID allocation until after the context
 		 * switch critical region since __new_context() cannot be
 		 * called with interrupts disabled.
+		 * 延迟新的ASID分配。直到到context switch 临界区之后，由于__new_context()
+		 * 不能在中断禁止情况下调用。
+		 * 进入该路径，只会设置一个flag，在finish_task_switch只会会进行处理。
+		 * 对于一个新的进程mm->pgd会分配一个新的，执行到该path，用户空间页表是空的。
 		 */
 		set_ti_thread_flag(task_thread_info(tsk), TIF_SWITCH_MM);
 	else
 		/*
 		 * That is a direct call to switch_mm() or activate_mm() with
 		 * interrupts enabled and a new context.
+		 * 直接调用switch_mm() or activate_mm()会进入到该路径
 		 */
 		switch_new_context(mm);
 }
 ```
 
-### cpu_switch_mm
+#### cpu_switch_mm
 
 ```c
 #define cpu_switch_mm(pgd,mm)				\
@@ -422,7 +432,7 @@ do {							\
 } while (0)
 ```
 
-### cpu_do_switch_mm
+#### cpu_do_switch_mm
 
 ```assembly
 ENTRY(cpu_do_switch_mm)
@@ -440,6 +450,198 @@ ENDPROC(cpu_do_switch_mm)
 ldr	\rd, [\rn, #MM_CONTEXT_ID]
 .endm
 ```
+
+#### switch_new_context
+
+```c
+static inline void switch_new_context(struct mm_struct *mm)
+{
+	unsigned long flags;
+	__new_context(mm);
+	local_irq_save(flags);
+	cpu_switch_mm(mm->pgd, mm);
+	local_irq_restore(flags);
+}
+```
+
+#### __new_context
+
+```c
+void __new_context(struct mm_struct *mm)
+{
+	unsigned int asid;
+	/*读取ID_AA64MMFR0_EL1寄存器，获取ASID bits,在qemu上返回16*/
+	unsigned int bits = asid_bits();
+
+	raw_spin_lock(&cpu_asid_lock);
+#ifdef CONFIG_SMP
+	/*
+	 * Check the ASID again, in case the change was broadcast from another
+	 * CPU before we acquired the lock.
+	 * cpu_last_asid有可能在其他cpu总进行了更改，所以再次进行判断
+	 */
+	if (!unlikely((mm->context.id ^ cpu_last_asid) >> MAX_ASID_BITS)) {
+		cpumask_set_cpu(smp_processor_id(), mm_cpumask(mm));
+		raw_spin_unlock(&cpu_asid_lock);
+		return;
+	}
+#endif
+	/*
+	 * At this point, it is guaranteed that the current mm (with an old
+	 * ASID) isn't active on any other CPU since the ASIDs are changed
+	 * simultaneously via IPI.
+	 */
+	asid = ++cpu_last_asid;
+	/*
+	 * If we've used up all our ASIDs, we need to start a new version and
+	 * flush the TLB.
+	 */
+	if (unlikely((asid & ((1 << bits) - 1)) == 0)) {/*硬件ASID使用完毕*/
+		/* increment the ASID version */
+ 		/* 硬件ASID也有可能是8位 */
+		cpu_last_asid += (1 << MAX_ASID_BITS) - (1 << bits);
+ 		/*cpu_last_asid == 0表示cpu_last_asid已经超过int的表示范围，出现了溢出*/
+		if (cpu_last_asid == 0) 
+			cpu_last_asid = ASID_FIRST_VERSION;
+		asid = cpu_last_asid + smp_processor_id();
+ 		/*硬件ASID溢出，会flush tlb*/
+		flush_context();
+#ifdef CONFIG_SMP
+		smp_wmb();
+		smp_call_function(reset_context, NULL, 1);
+#endif
+		cpu_last_asid += NR_CPUS - 1;
+	}
+	set_mm_context(mm, asid);
+	raw_spin_unlock(&cpu_asid_lock);
+}
+```
+
+#### set_mm_context
+
+```c
+static inline void set_mm_context(struct mm_struct *mm, unsigned int asid)
+{
+	mm->context.id = asid;
+	cpumask_copy(mm_cpumask(mm), cpumask_of(smp_processor_id()));
+}
+```
+
+### switch_to
+
+```
+#define switch_to(prev, next, last)					\
+	do {								\
+		((last) = __switch_to((prev), (next)));			\
+	} while (0)
+```
+
+#### __switch_to
+
+```c
+struct task_struct *__switch_to(struct task_struct *prev,
+				struct task_struct *next)
+{
+	struct task_struct *last;
+
+	fpsimd_thread_switch(next);
+	tls_thread_switch(next);
+	hw_breakpoint_thread_switch(next);
+	contextidr_thread_switch(next);
+	/*
+	 * Complete any pending TLB or cache maintenance on this CPU in case
+	 * the thread migrates to a different CPU.
+	 */
+	dsb(ish);
+	/* the actual thread switch */
+	last = cpu_switch_to(prev, next);
+	return last;
+}
+```
+
+#### cpu_switch_to
+
+```assembly
+/*
+ * Register switch for AArch64. The callee-saved registers need to be saved
+ * and restored. On entry:
+ *   x0 = previous task_struct (must be preserved across the switch)
+ *   x1 = next task_struct
+ * Previous and next are guaranteed not to be the same.
+ *
+ */
+ENTRY(cpu_switch_to)
+	/* x0为prev，x1为next*/
+	/* x8为prev.thread.cpu_context的指针*/
+	/* DEFINE(THREAD_CPU_CONTEXT,	offsetof(struct task_struct, thread.cpu_context));*/
+	add	x8, x0, #THREAD_CPU_CONTEXT   	
+	mov	x9, sp
+	/*
+	 * 将x19和x20存放到x8寄存器值对应的地址中，
+	 * 然后x8 + 16（因为存了两个64bit的寄存器，所以加16个字节）
+	 */
+	stp	x19, x20, [x8], #16		// store callee-saved registers
+	stp	x21, x22, [x8], #16
+	stp	x23, x24, [x8], #16
+	stp	x25, x26, [x8], #16
+	stp	x27, x28, [x8], #16
+	/*x29:fp, x9:sp,lr:pc*/
+	stp	x29, x9, [x8], #16	
+	/*
+	 *lr，即x30寄存器，的值为返回调用cpu_switch_to函数的值。即，执行return last
+	 */
+	str	lr, [x8] 
+	/*上面的代码把寄存器值存放到prev_task.thread.cpu_context中*/
+
+	/* x8为next.thread.cpu_context的指针*/
+	/* 将 next.thread.cpu_context的值存到寄存器中*/
+	add	x8, x1, #THREAD_CPU_CONTEXT
+	ldp	x19, x20, [x8], #16		// restore callee-saved registers
+	ldp	x21, x22, [x8], #16
+	ldp	x23, x24, [x8], #16
+	ldp	x25, x26, [x8], #16
+	ldp	x27, x28, [x8], #16
+	ldp	x29, x9, [x8], #16
+	/* 对于fork刚创建的进程，lr的值为ret_from_fork。已有的进程lr的值为return last的值*/
+	ldr	lr, [x8]
+	mov	sp, x9/*x9 为sp的值*/
+	ret /*ret默认会跳转到x30寄存器（即lr寄存器）的值，这样就开始执行新进程了*/
+ENDPROC(cpu_switch_to)
+```
+
+#### cpu_context
+
+```c
+struct task_struct {
+    struct thread_struct thread;
+}
+struct thread_struct {
+	struct cpu_context	cpu_context;	/* cpu context */
+	unsigned long		tp_value;
+	struct fpsimd_state	fpsimd_state;
+	unsigned long		fault_address;	/* fault info */
+	unsigned long		fault_code;	/* ESR_EL1 value */
+	struct debug_info	debug;		/* debugging */
+};
+
+struct cpu_context {
+	unsigned long x19;
+	unsigned long x20;
+	unsigned long x21;
+	unsigned long x22;
+	unsigned long x23;
+	unsigned long x24;
+	unsigned long x25;
+	unsigned long x26;
+	unsigned long x27;
+	unsigned long x28;
+	unsigned long fp;
+	unsigned long sp;
+	unsigned long pc;
+};
+```
+
+
 
 
 
