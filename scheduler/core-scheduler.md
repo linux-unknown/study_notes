@@ -671,6 +671,87 @@ struct task_struct *__switch_to(struct task_struct *prev,
 
 进程A中执行cpu_switch_to之后，会把进程A的PC，LR，FP，X28到X19寄存器保存到A进程的cpu_context中，然后执行B进程，在B进程执行中，有可能被抢占，有可能进程B最终会调用到\__schedule等等，然后切换到另一个进程X，X也需也和B进程一样，总之历经N多次进程切换，然后Y进程执行__schedule，next进程为A，然后调用到cpu_switch_to，在cpu_switch_to中使用A进程的cpu_context还原寄存器，然后就跳转到A进程执行,这个时候A进程执行return last;代码，last是什么呢，这里的last就是Y进程，但是我们调用switch_to的时候传递的last就是prev，这里怎么变了呢。注意在cpu_switch_to中，并不保存X0寄存器，所以说每次执行cpu_switch_to的时候，X0寄存器就是prev指针，而在ARM64中返回值，是使用X0寄存器传递的，所以last为Y进程。综上，可以看到在进程切换的时候，除了next，和prev还有last。
 
+### finish_task_switch
+
+```c
+/*这里的prev就是A进程经过了N多次调用之后，然后调用__schedule切换到A进程的进程Y*/
+static struct rq *finish_task_switch(struct task_struct *prev)
+	__releases(rq->lock)
+{
+	struct rq *rq = this_rq();
+	struct mm_struct *mm = rq->prev_mm;
+	long prev_state;
+	/*将run queue的prev_mm置NULL*/
+	rq->prev_mm = NULL;
+
+	/*
+	 * A task struct has one reference for the use as "current".
+	 * If a task dies, then it sets TASK_DEAD in tsk->state and calls
+	 * schedule one last time. The schedule call will never return, and
+	 * the scheduled task must drop that reference.
+	 * The test for TASK_DEAD must occur while the runqueue locks are
+	 * still held, otherwise prev could be scheduled on another cpu, die
+	 * there before we look at prev->state, and then the reference would
+	 * be dropped twice.
+	 *		Manfred Spraul <manfred@colorfullife.com>
+	 */
+	prev_state = prev->state;
+	vtime_task_switch(prev);
+	finish_arch_switch(prev);
+	perf_event_task_sched_in(prev, current);
+	finish_lock_switch(rq, prev);
+	finish_arch_post_lock_switch();
+
+	fire_sched_in_preempt_notifiers(current);
+    /*
+     * mm =  rq->prev_mm
+     * 如果切换的时候prev为内核线程，会将rq->prev_mm设置为oldmm，其他情况rq->prev_mm都
+     * 为NULL，如果mm不为NULL则表示之前在进程切换的时候，借用了其他用户空间的进程，
+     * mmdrop中会对mm->mm_count减1
+     */
+	if (mm)
+		mmdrop(mm);
+	if (unlikely(prev_state == TASK_DEAD)) {
+		if (prev->sched_class->task_dead)
+			prev->sched_class->task_dead(prev);
+
+		/*
+		 * Remove function-return probe instances associated with this
+		 * task and put them back on the free list.
+		 */
+		kprobe_flush_task(prev);
+		put_task_struct(prev);
+	}
+
+	tick_nohz_task_switch(current);
+	return rq;
+}
+```
+
+#### finish_arch_post_lock_switch
+
+```c
+static inline void finish_arch_post_lock_switch(void)
+{
+	/*
+	 * 在check_and_switch_context中可能会设置TIF_SWITCH_MM，
+	 * 设置该flag会延后分配新的ASID和执行cpu_switch_mm
+	 */
+	if (test_and_clear_thread_flag(TIF_SWITCH_MM)) {
+		struct mm_struct *mm = current->mm;
+		unsigned long flags;
+
+		__new_context(mm);
+
+		local_irq_save(flags);
+		cpu_switch_mm(mm->pgd, mm);
+		local_irq_restore(flags);
+	}
+}
+```
+
+
+
 ## ASID
 
 ASID全程adress space ID。
