@@ -529,7 +529,7 @@ static inline void set_mm_context(struct mm_struct *mm, unsigned int asid)
 
 ### switch_to
 
-```
+```c
 #define switch_to(prev, next, last)					\
 	do {								\
 		((last) = __switch_to((prev), (next)));			\
@@ -641,34 +641,62 @@ struct cpu_context {
 };
 ```
 
+#### switch_to三个参数
 
+从switch_to看，它有三个参数，如下：
 
+```c
+#define switch_to(prev, next, last)					\
+	do {								\
+		((last) = __switch_to((prev), (next)));			\
+	} 
+```
 
+虽然在调用switch_to的时候，传递的prev和last是相同的，但是在进程重新被调度，并且返回的时候，last和prev并不一定是相同的。
 
-### ASID
+假设有两个进程A，B
+
+在进程A的时候调用了switch_to，进一步最终调用到\__switch_to，__switch_to可以分为两部分：
+
+```c
+struct task_struct *__switch_to(struct task_struct *prev,
+				struct task_struct *next)
+{
+	/*调用之后就会切换到next task*/
+	last = cpu_switch_to(prev, next);
+    /*重新调用到prev进程后执行*/
+	return last;
+}
+```
+
+进程A中执行cpu_switch_to之后，会把进程A的PC，LR，FP，X28到X19寄存器保存到A进程的cpu_context中，然后执行B进程，在B进程执行中，有可能被抢占，有可能进程B最终会调用到\__schedule等等，然后切换到另一个进程X，X也需也和B进程一样，总之历经N多次进程切换，然后Y进程执行__schedule，next进程为A，然后调用到cpu_switch_to，在cpu_switch_to中使用A进程的cpu_context还原寄存器，然后就跳转到A进程执行,这个时候A进程执行return last;代码，last是什么呢，这里的last就是Y进程，但是我们调用switch_to的时候传递的last就是prev，这里怎么变了呢。注意在cpu_switch_to中，并不保存X0寄存器，所以说每次执行cpu_switch_to的时候，X0寄存器就是prev指针，而在ARM64中返回值，是使用X0寄存器传递的，所以last为Y进程。综上，可以看到在进程切换的时候，除了next，和prev还有last。
+
+## ASID
+
+ASID全程adress space ID。
 
 CPU上运行了若干的用户空间的进程和内核线程，为了加快性能，CPU中往往设计了TLB和Cache这样的HW block。Cache为了更快的访问main memory中的数据和指令，而TLB是为了更快的进行地址翻译而将部分的页表内容缓存到了Translation lookasid buffer中，避免了从main memory访问页表的过程。
 
-假如不做任何的处理，那么在进程A切换到进程B的时候，TLB和Cache中同时存在了A和B进程的数据。对于kernel space其实无所谓，因为所有的进程都是共享的，但是对于A和B进程，它们各种有自己的独立的用户地址空间，也就是说，同样的一个虚拟地址X，在A的地址空间中可以被翻译成Pa，而在B地址空间中会被翻译成Pb，如果在地址翻译过程中，TLB中同时存在A和B进程的数据，那么旧的A地址空间的缓存项会影响B进程地址空间的翻译，因此，在进程切换的时候，需要有tlb的操作，以便清除旧进程的影响，具体怎样做呢？我们下面一一讨论。
-
-2、绝对没有问题，但是性能不佳的方案
+假如不做任何的处理，那么在进程A切换到进程B的时候，TLB和Cache中同时存在了A和B进程的数据。对于kernel space其实无所谓，因为所有的进程都是共享的，但是对于A和B进程，它们各种有自己的独立的用户地址空间，也就是说，同样的一个虚拟地址X，在A的地址空间中可以被翻译成Pa，而在B地址空间中会被翻译成Pb，如果在地址翻译过程中，TLB中同时存在A和B进程的数据，那么旧的A地址空间的缓存项会影响B进程地址空间的翻译，因此，在进程切换的时候，需要有tlb的操作，以便清除旧进程的影响
 
 当系统发生进程切换，从进程A切换到进程B，从而导致地址空间也从A切换到B，这时候，我们可以认为在A进程执行过程中，所有TLB和Cache的数据都是for A进程的，一旦切换到B，整个地址空间都不一样了，因此需要全部flush掉（注意：我这里使用了linux内核的术语，flush就是意味着将TLB或者cache中的条目设置为无效，对于一个ARM平台上的嵌入式工程师，一般我们会更习惯使用invalidate这个术语，不管怎样，在本文中，flush等于invalidate）。
 
 这种方案当然没有问题，当进程B被切入执行的时候，其面对的CPU是一个干干净净，从头开始的硬件环境，TLB和Cache中不会有任何的残留的A进程的数据来影响当前B进程的执行。当然，稍微有一点遗憾的就是在B进程开始执行的时候，TLB和Cache都是冰冷的（空空如也），因此，B进程刚开始执行的时候，TLB miss和Cache miss都非常严重，从而导致了性能的下降。
 
-3、如何提高TLB的性能？
+### 如何提高TLB的性能？
 
-对一个模块的优化往往需要对该模块的特性进行更细致的分析、归类，上一节，我们采用进程地址空间这样的术语，其实它可以被进一步细分为内核地址空间和用户地址空间。对于所有的进程（包括内核线程），内核地址空间是一样的，因此对于这部分地址翻译，无论进程如何切换，内核地址空间转换到物理地址的关系是永远不变的，其实在进程A切换到B的时候，不需要flush掉，因为B进程也可以继续使用这部分的TLB内容（上图中，橘色的block）。对于用户地址空间，各个进程都有自己独立的地址空间，在进程A切换到B的时候，TLB中的和A进程相关的entry（上图中，青色的block）对于B是完全没有任何意义的，需要flush掉。
+对一个模块的优化往往需要对该模块的特性进行更细致的分析、归类，上一节，我们采用进程地址空间这样的术语，其实它可以被进一步细分为内核地址空间和用户地址空间。对于所有的进程（包括内核线程），内核地址空间是一样的，因此对于这部分地址翻译，无论进程如何切换，内核地址空间转换到物理地址的关系是永远不变的。对于用户地址空间，各个进程都有自己独立的地址空间，在进程A切换到B的时候，TLB中的和A进程相关的entry对于B是完全没有任何意义的，需要flush掉。
 
 在这样的思路指导下，我们其实需要区分global和local（其实就是process-specific的意思）这两种类型的地址翻译，因此，在页表描述符中往往有一个bit来标识该地址翻译是global还是local的，同样的，在TLB中，这个标识global还是local的flag也会被缓存起来。有了这样的设计之后，我们可以根据不同的场景而flush all或者只是flush local tlb entry。
 
-4、特殊情况的考量
+### 特殊情况的考量
 
 我们考虑下面的场景：进程A切换到内核线程K之后，其实地址空间根本没有必要切换，线程K能访问的就是内核空间的那些地址，而这些地址也是和进程A共享的。既然没有切换地址空间，那么也就不需要flush 那些进程特定的tlb entry了，当从K切换会A进程后，那么所有TLB的数据都是有效的，从大大降低了tlb miss。此外，对于多线程环境，切换可能发生在一个进程中的两个线程，这时候，线程在同样的地址空间，也根本不需要flush tlb。
 
-4、进一步提升TLB的性能 
+### 进一步提升TLB的性能 
 
 当然可以，不过这需要我们在设计TLB block的时候需要识别process specific的tlb entry，也就是说，TLB block需要感知到各个进程的地址空间。为了完成这样的设计，我们需要标识不同的address space，这里有一个术语叫做ASID（address space ID）。原来TLB查找是通过虚拟地址VA来判断是否TLB hit。有了ASID的支持后，TLB hit的判断标准修改为（虚拟地址＋ASID），ASID是每一个进程分配一个，标识自己的进程地址空间。TLB block如何知道一个tlb entry的ASID呢？一般会来自CPU的系统寄存器（对于ARM64平台，它来自TTBRx_EL1寄存器），这样在TLB block在缓存（VA-PA-Global flag）的同时，也就把当前的ASID缓存在了对应的TLB entry中，这样一个TLB entry中包括了（VA-PA-Global flag-ASID）。
 
-有了ASID的支持后，A进程切换到B进程再也不需要flush tlb了，因为A进程执行时候缓存在TLB中的残留A地址空间相关的entry不会影响到B进程，虽然A和B可能有相同的VA，但是ASID保证了硬件可以区分A和B进程地址空间
+有了ASID的支持后，A进程切换到B进程再也不需要flush tlb了，因为A进程执行时候缓存在TLB中的残留A地址空间相关的entry不会影响到B进程，虽然A和B可能有相同的VA，但是ASID保证了硬件可以区分A和B进程地址空间。
+
+ASID部分机会全部引用http://www.wowotech.net/process_management/context-switch-tlb.html
