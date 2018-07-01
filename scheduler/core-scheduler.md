@@ -750,7 +750,195 @@ static inline void finish_arch_post_lock_switch(void)
 }
 ```
 
+### 调度时机
 
+从对`__schedule`的注释用可以看到调度的时机
+
+1. 阻塞，mutex，等待队列，信号量等。
+
+2. 中断和用户空间返回（系统调用）检查TIF_NEED_RESCHED flag。
+
+   A. tick中断`scheduler_tick()`会设置TIF_NEED_RESCHED flag。进程时间片用完。
+
+   B. 抢占当前进程会设置TIF_NEED_RESCHED 。高优先级抢占低优先级。
+
+   C. 用户空间设置进程优先级的时候，可能会设置TIF_NEED_RESCHED 。设置调度参数。
+
+   D. 调用yeld。
+
+   E. 内核定时器。
+
+   上面只是列出了几个场景，并不是所有。
+
+#### 内核抢占
+
+在发生内核抢占的时候会调用
+
+```c
+__preempt_count_add(PREEMPT_ACTIVE);
+```
+
+我们看到在`__schedule()`会对PREEMPT_ACTIVE进行判断
+
+```c
+if (prev->state && !(preempt_count() & PREEMPT_ACTIVE)) {
+	if (unlikely(signal_pending_state(prev->state, prev))) {
+		prev->state = TASK_RUNNING;
+	} else {
+		deactivate_task(rq, prev, DEQUEUE_SLEEP);
+		prev->on_rq = 0;
+	}
+	switch_count = &prev->nvcsw;
+}
+```
+
+可以看到如果prev->state等于0（表示prev是running状态，如果是其他调度，会先设置state的状态）或者preempt_count() & PREEMPT_ACTIVE不为0，那么就直接执行`context_switch()`抢占当前进程，主要是为了快速执行。**这时被抢占的task还在run queue中。**
+
+`preempt_count()`其实就是检查preempt_count，该**值为0表示该进程时可以抢占的**。如果是内核抢占，会设置PREEMPT_ACTIVE。表示是kernel抢占。
+
+为什么执行kernel抢占要设置PREEMPT_ACTIVE呢。
+
+从`if (prev->state && !(preempt_count() & PREEMPT_ACTIVE))`可以看到如果prev->state == 0则直接执行进程切换，这个时候，该进程还在run queue中，那么在以后的时间就会重新调用到该进程。如果prev->state != 0,则需要检查preempt_count() & PREEMPT_ACTIVE)。看下面一个例子
+
+```c
+for (;;) {
+	prepare_to_wait(&wq, &__wait, TASK_UNINTERRUPTIBLE);
+	if (condition)
+		break;
+	schedule();
+}
+```
+
+第一种情形：
+
+​	在第二行中，如果设置了task的状态（state不为0），但是还没有将该task添加到wq中，这个时候如果出现了kernel抢占，如果不判断preempt_count() & PREEMPT_ACTIVE)，那么就会执行`deactivate_task(rq, prev, DEQUEUE_SLEEP);`将该task中run queue中移除，这个时候没有机会将该task添加到run queue中，那么该task将没有机会在运行了。调用wake_up，这时等待对了中是没有该task的。
+
+第二种情形：
+
+​	已经执行了schedule，然后等到了wake_up，这个时候该进程不唤醒重新调用prepare_to_wait，如果这个时候，发生了内核抢占，如果没有preempt_count() & PREEMPT_ACTIVE)检查，则该进程也会被移除等待队列，**如果只有这一次wake_up**,那么该task以后也没有机会执行了。
+
+中断上下文进入抢占：
+
+```assembly
+el1_irq:
+	/*保存上下文*/
+	kernel_entry 1	/*el=1*/
+	enable_dbg	/*使能watchpoint*/
+#ifdef CONFIG_TRACE_IRQFLAGS
+	bl	trace_hardirqs_off
+#endif
+	/*跳转到handle_arch_irq = gic_handle_irq*/
+	irq_handler
+
+#ifdef CONFIG_PREEMPT
+	/*tsk为寄存器28*/
+	get_thread_info tsk
+	ldr	w24, [tsk, #TI_PREEMPT]		// get preempt count
+	cbnz	w24, 1f				// preempt count != 0
+	ldr	x0, [tsk, #TI_FLAGS]		// get flags
+	/*如果x0的TIF_NEED_RESCHED置位，则表示需要调度*/
+	tbz	x0, #TIF_NEED_RESCHED, 1f	// needs rescheduling?
+	bl	el1_preempt
+1:
+#endif
+#ifdef CONFIG_TRACE_IRQFLAGS
+	bl	trace_hardirqs_on
+#endif
+	kernel_exit 1
+```
+
+preempt_schedule_irq会调用preempt_schedule_irq
+
+```c
+/*
+ * this is the entry point to schedule() from kernel preemption
+ * off of irq context.
+ * Note, that this is called and return with irqs disabled. This will
+ * protect us against recursive calling from irq.
+ */
+/* 中断上下kernel preemption off进入 schedule()的入口，进入schedule()的时候
+ * kernel preemption是关的
+ */
+asmlinkage __visible void __sched preempt_schedule_irq(void)
+{
+	enum ctx_state prev_state;
+
+	/* Catch callers which need to be fixed */
+	BUG_ON(preempt_count() || !irqs_disabled());
+
+	prev_state = exception_enter();
+
+	do {
+		__preempt_count_add(PREEMPT_ACTIVE);
+		/* 在中断处理函数中中断是disable的，所以这里需要enable */
+		local_irq_enable();
+		__schedule();
+		local_irq_disable();
+		__preempt_count_sub(PREEMPT_ACTIVE);
+
+		/*
+		 * Check again in case we missed a preemption opportunity
+		 * between schedule and now.
+		 */
+		barrier();
+	} while (need_resched());
+
+	exception_exit(prev_state);
+}
+```
+
+
+
+   ```c
+/*
+ * this is the entry point to schedule() from in-kernel preemption
+ * off of preempt_enable. Kernel preemptions off return from interrupt
+ * occur there and call schedule directly.
+ */
+ 
+ /* 从preempt_enable 进入schedule()，当然进入后preemption是关闭的。*/
+asmlinkage __visible void __sched notrace preempt_schedule(void)
+{
+	/*
+	 * If there is a non-zero preempt_count or interrupts are disabled,
+	 * we do not want to preempt the current task. Just return..
+	 */
+	if (likely(!preemptible()))
+		return;
+
+	preempt_schedule_common();
+}
+   ```
+
+从上面的代码看
+
+```c
+__preempt_count_add(PREEMPT_ACTIVE);
+local_irq_enable();
+__schedule();
+local_irq_disable();
+__preempt_count_sub(PREEMPT_ACTIVE);
+```
+
+先是调用了`__preempt_count_add(PREEMPT_ACTIVE);`然后调用`__schedule();`这样是不是表示在没有调用`local_irq_disable();`之前系统是不可抢占呢？但是调用`__preempt_count_sub(PREEMPT_ACTIVE);`的时机应该是在重新调度道该task才会调用`__preempt_count_sub(PREEMPT_ACTIVE);`这不知道需要什么时候。
+
+起始看下`__preempt_count_add(PREEMPT_ACTIVE);`的实现
+
+```c
+static __always_inline void __preempt_count_add(int val)
+{
+	*preempt_count_ptr() += val;
+}
+```
+
+```c
+static __always_inline int *preempt_count_ptr(void)
+{
+	return &current_thread_info()->preempt_count;c
+}
+```
+
+**可以看出是否可以抢占起始只是针对该task的，该task不能抢占，并不表示要运行的task不能抢占。**
 
 ## ASID
 
