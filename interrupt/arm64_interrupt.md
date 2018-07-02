@@ -23,7 +23,8 @@ ENTRY(vectors)
 	ventry	el1_fiq_invalid			// FIQ EL1t
 	ventry	el1_error_invalid		// Error EL1t
 
-	/*同级别的，没有级别跃迁, EL1h表示跳转到进入到kernel之后使用EL1的栈寄存器SP
+	/* 
+	 * 同级别的，没有级别跃迁, EL1h表示跳转到进入到kernel之后使用EL1的栈寄存器SP
 	 * 后缀t表示：Indicates use of the SP_ELx stack pointer.
 	 * 后缀h表示：Indicates use of the SP_EL0 stack pointer.
 	 */
