@@ -817,7 +817,7 @@ for (;;) {
 
 ​	已经执行了schedule，然后等到了wake_up，这个时候该进程不唤醒重新调用prepare_to_wait，如果这个时候，发生了内核抢占，如果没有preempt_count() & PREEMPT_ACTIVE)检查，则该进程也会被移除等待队列，**如果只有这一次wake_up**,那么该task以后也没有机会执行了。
 
-中断上下文进入抢占：
+#### 中断上下文进入抢占
 
 ```assembly
 el1_irq:
@@ -887,7 +887,7 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 }
 ```
 
-
+### PREEMPT_ACTIVE作用域
 
    ```c
 /*
@@ -938,7 +938,9 @@ static __always_inline int *preempt_count_ptr(void)
 }
 ```
 
-**可以看出是否可以抢占起始只是针对该task的，该task不能抢占，并不表示要运行的task不能抢占。**
+**可以看出是否可以抢占其实只是针对该task的，该task不能抢占，并不表示要运行的task不能抢占。**
+
+在后面的kenrel中PREEMPT_ACTIVE已经被去掉了，`__schedule`变成了`static void __sched __schedule(bool preempt)`增加了一个参数，表示是不是kernel抢占。这样显得更合理。个人感觉使用PREEMPT_ACTIVE显得比较别扭。
 
 ## ASID
 
