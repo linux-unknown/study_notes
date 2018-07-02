@@ -23,7 +23,10 @@ ENTRY(vectors)
 	ventry	el1_fiq_invalid			// FIQ EL1t
 	ventry	el1_error_invalid		// Error EL1t
 
-	/*同级别的，没有级别跃迁*/
+	/*同级别的，没有级别跃迁, EL1h表示跳转到进入到kernel之后使用EL1的栈寄存器SP
+	 * 后缀t表示：Indicates use of the SP_ELx stack pointer.
+	 * 后缀h表示：Indicates use of the SP_EL0 stack pointer.
+	 */
 	ventry	el1_sync			// Synchronous EL1h
 	ventry	el1_irq				// IRQ EL1h
 	ventry	el1_fiq_invalid			// FIQ EL1h
@@ -522,6 +525,86 @@ asmlinkage void do_notify_resume(struct pt_regs *regs, unsigned int thread_flags
 
 }
 ```
+
+# SP_ELx
+
+当在EL0执行，PE使用EL0的栈指针寄存器SP_EL0。
+
+当在其他Exception level执行，PE可以被配置使用SP_EL0或者该Exception level的专用栈寄存器SP_ELx。
+
+默认情况，发生异常会选择对应Exception Level的栈指针寄存SP_ELx,比如，发生异常到EL1，使用SP_EL1。软件在对应的Exception level执行的然后可以修改PSTATE.SP来选择使用SP_EL0。
+
+即使发生异常，这样的修改不会改变Exception level，比如，PE在EL1执行，PE使用SP_EL0,然后发生异常到EL1，栈指针寄存器会改为SP_EL1.
+
+从异常发生的伪代码可以看到，虽然如果设置了PSTATE.SP，那么在**同级别产生异常的时候，中断的入口会变化**。
+
+```c
+aarch64/exceptions/takeexception/AArch64.TakeException
+// AArch64.TakeException() 
+// ======================= 
+// Take an exception to an Exception Level using AArch64. 
+
+AArch64.TakeException(bits(2) target_el, ExceptionRecord exception, 
+	bits(64) preferred_exception_return, integer vect_offset) 
+assert HaveEL(target_el) && !ELUsingAArch32(target_el) && UInt(target_el) >= UInt(PSTATE.EL); 
+
+// If coming from AArch32 state, the top parts of the X[] registers might be set to zero 
+from_32 = UsingAArch32(); 
+if from_32 then AArch64.MaybeZeroRegisterUppers(); 
+/* Exception level大于当前的level */
+if UInt(target_el) > UInt(PSTATE.EL) then 
+	boolean lower_32; 
+	if target_el == EL3 then 
+		if !IsSecure() && HaveEL(EL2) then 
+			lower_32 = ELUsingAArch32(EL2); 
+		else
+			lower_32 = ELUsingAArch32(EL1); 
+	elsif IsInHost() && PSTATE.EL == EL0 && target_el == EL2 then 
+			lower_32 = ELUsingAArch32(EL0); 
+	else
+			lower_32 = ELUsingAArch32(target_el - 1); 
+	/* 如果不是从arm32，那么跳转到异常向量表的base + 0x400 */
+	vect_offset = vect_offset + (if lower_32 then 0x600 else 0x400); 
+/* Exception level等于当前的level，因为不可能跳转到比当前低的Exception level */
+elsif PSTATE.SP == '1' then /* 如果PSTATE.SP == 1，表示使用SP_ELx */
+		vect_offset = vect_offset + 0x200; 
+/* 
+ * 还有一个调节安没有写出来，如果target_el == PSTATE.EL && PSTATE.SP == 0，那么异常向量的入口为：
+ * vect_offset = vect_offset + 0x000；
+ */
+spsr = GetPSRFromPSTATE(); 
+
+if HaveUAOExt() then PSTATE.UAO = '0'; 
+if !(exception.type IN {Exception_IRQ, Exception_FIQ}) then 
+	AArch64.ReportException(exception, target_el); 
+
+PSTATE.EL = target_el; PSTATE.nRW = '0'; PSTATE.SP = '1'; 
+
+SPSR[] = spsr; 
+ELR[] = preferred_exception_return; 
+
+PSTATE.SS = '0'; 
+PSTATE.<D,A,I,F> = '1111'; /* 屏蔽，D，A，I，F异常 */
+PSTATE.IL = '0'; 
+if from_32 then // Coming from AArch32 
+	PSTATE.IT = '00000000'; PSTATE.T = '0'; // PSTATE.J is RES0 
+if HavePANExt() && (PSTATE.EL == EL1 || (PSTATE.EL == EL2 && ELIsInHost(EL0))) &&
+	SCTLR[].SPAN == '0' then 
+	PSTATE.PAN = '1'; 
+
+BranchTo(VBAR[]<63:11>:vect_offset<10:0>, BranchType_EXCEPTION); 
+
+if HaveRASExt() && SCTLR[].IESB == '1' then 
+	ErrorSynchronizationBarrier(MBReqDomain_FullSystem, MBReqTypes_All); 
+	iesb_req = TRUE; 
+	TakeUnmaskedPhysicalSErrorInterrupts(iesb_req); 
+
+EndOfInstruction();
+```
+
+
+
+
 
 
 
