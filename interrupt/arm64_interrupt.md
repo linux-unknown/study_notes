@@ -51,7 +51,7 @@ ventry 宏表示直接跳转到对应的lable中。其中的对其应该是arm64
 
 下图是arm64 官方的exception vector table：
 
-![arm64 exception tabls](.\arm64 exception table.bmp)
+![arm64 exception tabls](./arm64_exception_table.bmp)
 
 从kernel的中断向量代码可以看出kenrel使用的是SPx，即使用对应el级别的sp。
 
