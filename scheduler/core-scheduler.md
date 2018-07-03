@@ -361,7 +361,7 @@ switch_mm(struct mm_struct *prev, struct mm_struct *next, struct task_struct *ts
 	 * init_mm.pgd does not contain any user mappings and it is always
 	 * active for kernel addresses in TTBR1. Just set the reserved TTBR0.
 	 * init_mm是kernel第一个task的struct mm_struct， INIT_TASK的时候会将active_mm
-	 * 初始化为init_mm。什么时候mm赋值为init_mm？
+	 * 初始化为init_mm。什么时候mm赋值为init_mm？,在idle_task_exit中next会为init_mm
 	 */
 	if (next == &init_mm) {
         /*
