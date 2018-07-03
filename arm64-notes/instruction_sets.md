@@ -70,7 +70,7 @@ X[d] = base + imm;
 
 ADRP 对labl的地址采用PC + offset的方式，所以可以实现位置无关代码
 
-ADRP是页对其的，所以齐只能获得lable的[63:13]地址。要获得完整的地址，一般如下：
+ADRP是页对齐的，所以齐只能获得lable的[63:13]地址。要获得完整的地址，一般如下：
 ```assembly
 adrp	x1, handle_arch_irq
 ldr x1, [x1, #:lo12:handle_arch_irq]

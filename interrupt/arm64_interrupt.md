@@ -51,7 +51,7 @@ b	\label
 .endm
 ```
 
-ventry 宏表示直接跳转到对应的lable中。其中的对其应该是arm64架构要求的。
+ventry 宏表示直接跳转到对应的lable中。其中的对齐应该是arm64架构要求的。
 
 下图是arm64 官方的exception vector table：
 
