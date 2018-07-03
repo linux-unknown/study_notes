@@ -138,7 +138,7 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
 }
 ```
 
-init_task.stack = &init_thread_union.thread_info,init_thread_union为一个联合体，联合体的大小有最大元素值决定。所以联合体的大小为THREAD_SIZE/sizeof(long)，在arm64为16K。
+init_task.stack = &init_thread_union.thread_info,init_thread_union为一个联合体，联合体的大小由占最大空间的元素决定决定。所以联合体的大小为THREAD_SIZE/sizeof(long)，在arm64为16K。
 
 ```c
 union thread_union {
@@ -146,11 +146,11 @@ union thread_union {
 	unsigned long stack[THREAD_SIZE/sizeof(long)];
 };
 ```
-因为栈是高地址相低地址增长，所以栈低，也就是末端为的地址也等于thread_info的地址。栈顶可以在从汇编跳转到C入口地址给sp寄存器复制时看到：
+因为栈是高地址向低地址增长，所以栈低，也就是末端为的地址也等于thread_info的地址。栈顶可以在从汇编跳转到C入口地址给sp寄存器复制时看到：
 
-```
+```assembly
 /* arch/arm64/include/asm/thread_info.h*/
-#define THREAD_SIZE		16384	/*4个页（如果也为4K）*/
+#define THREAD_SIZE		16384	/*4个页（如果页为4K）*/
 #define THREAD_START_SP		(THREAD_SIZE - 16)
 
 __switch_data:
@@ -211,8 +211,8 @@ static inline struct thread_info *current_thread_info(void) __attribute_const__;
 static inline struct thread_info *current_thread_info(void)
 {
 	/**
-	 *将栈的地址按照THREAD_SIZE对齐就可以得到thread_info的指针，因为thread_info起始地址也是
-	 *THREAD_SIZE对齐的*
+	 * 将栈的地址按照THREAD_SIZE对齐就可以得到thread_info的指针，因为thread_info起始地址也是
+	 * THREAD_SIZE对齐的*
 	 */
 	return (struct thread_info *)
 		(current_stack_pointer & ~(THREAD_SIZE - 1));
