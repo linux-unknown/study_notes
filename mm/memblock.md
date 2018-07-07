@@ -287,15 +287,16 @@ void __init memblock_enforce_memory_limit(phys_addr_t limit)
 
 	/* find out max address 
 	 * 这个时候已经读取了dts中的memory信息，并且存放到了memblock.memory中
-	 * 找到最大的max address
+	 * 找到最大的max address，如果limit超过所有region的size之和，则max_adress不变
+	 * 等于ULLONG_MAX
 	 */
 	for_each_memblock(memory, r) {
 		if (limit <= r->size) {
-			/* r->base + limit会大于limit，这样limit就没意义了？ 
-			 * base	size	limit(100)
-			 * 10	30		100 - 30 = 70
-			 * 40	60		80 - 60 = 10
-			 * 95	30		100 + 10 = 110
+			/* r->base + limit会大于limit，这样limit就没意义了？
+			 * base size    limit(100)
+			 * 10   30              100 - 30 = 70
+			 * 40   60              80 - 60 = 10
+			 * 95   30              100 + 10 = 110
 			 * 没看明白为什么这么搞
 			 */
 			max_addr = r->base + limit;
@@ -304,7 +305,7 @@ void __init memblock_enforce_memory_limit(phys_addr_t limit)
 		/* 
 		 * limit = limit - r->size，
 		 * 如果limit 一直大于 r->size，则表示所有region都在limit之内
-		 * max_address不变
+		 * 那么max_address不变
 		 */
 		limit -= r->size;
 	}
