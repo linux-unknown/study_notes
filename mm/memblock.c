@@ -983,6 +983,51 @@ static void arm64_memory_present(void)
 	}
 }
 
+
+
+struct mem_section *mem_section[NR_SECTION_ROOTS];
+
+
+
+#ifdef CONFIG_SPARSEMEM
+#define MAX_PHYSMEM_BITS	48
+#define SECTION_SIZE_BITS	30
+#endif
+
+#define PAGE_SHIFT		12
+
+#define PA_SECTION_SHIFT	(SECTION_SIZE_BITS)
+#define PFN_SECTION_SHIFT	(SECTION_SIZE_BITS - PAGE_SHIFT) /* 30 - 12 = 18 */
+
+#define pfn_to_section_nr(pfn) ((pfn) >> PFN_SECTION_SHIFT) /* 18 */
+
+/* 一个section中包含的页 */
+#define PAGES_PER_SECTION       (1UL << PFN_SECTION_SHIFT)
+
+
+#define PAGE_SIZE		(_AC(1,UL) << PAGE_SHIFT)
+
+#define SECTIONS_PER_ROOT       (PAGE_SIZE / sizeof (struct mem_section))
+
+#define SECTION_NR_TO_ROOT(sec)	((sec) / SECTIONS_PER_ROOT)
+
+
+/* SECTION_SHIFT	#bits space required to store a section # */
+#define SECTIONS_SHIFT	(MAX_PHYSMEM_BITS - SECTION_SIZE_BITS) /* 48 - 30 */
+
+
+#define NR_MEM_SECTIONS		(1UL << SECTIONS_SHIFT)
+
+/* NR_MEM_SECTIONS * SECTIONS_PER_ROOT */
+#define NR_SECTION_ROOTS	DIV_ROUND_UP(NR_MEM_SECTIONS, SECTIONS_PER_ROOT)
+
+
+
+/**
+ * pfn : addr >>  PAGE_SHIFT
+ * section_nr: addr >> (PFN_SECTION_SHIFT + PAGE_SHIFT)
+ *
+ */
 void __init memory_present(int nid, unsigned long start, unsigned long end)
 {
 	unsigned long pfn;
@@ -1002,4 +1047,35 @@ void __init memory_present(int nid, unsigned long start, unsigned long end)
 							SECTION_MARKED_PRESENT;
 	}
 }
+
+
+
+static int __meminit sparse_index_init(unsigned long section_nr, int nid)
+{
+	/* 
+	 * section_nr / SECTIONS_PER_ROOT
+	 */
+	unsigned long root = SECTION_NR_TO_ROOT(section_nr);
+	struct mem_section *section;
+
+	if (mem_section[root])
+		return -EEXIST;
+
+	section = sparse_index_alloc(nid);
+	if (!section)
+		return -ENOMEM;
+
+	mem_section[root] = section;
+
+	return 0;
+}
+
+#define PMD_SHIFT		((PAGE_SHIFT - 3) * 2 + 3) /* (12 - 3)*2 + 3 = 21*/
+
+#define HPAGE_SHIFT		PMD_SHIFT	/*21*/
+
+#define HUGETLB_PAGE_ORDER	(HPAGE_SHIFT - PAGE_SHIFT) /*21 - 12 = 9*/
+
+#define pageblock_order		HUGETLB_PAGE_ORDER /*9*/
+
 
