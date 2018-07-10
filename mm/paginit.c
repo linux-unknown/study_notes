@@ -136,6 +136,7 @@ static void arm64_memory_present(void)
 	struct memblock_region *reg;
 
 	for_each_memblock(memory, reg){
+		/* 对内存探测得出的每个region调用memory_present() */
 		memory_present(0, memblock_region_memory_base_pfn(reg),
 			       memblock_region_memory_end_pfn(reg));
 	}
@@ -189,7 +190,7 @@ static inline unsigned long memblock_region_memory_end_pfn(const struct memblock
 
 
 /* SECTION_SHIFT	#bits space required to store a section # */
-#define SECTIONS_SHIFT	(MAX_PHYSMEM_BITS - SECTION_SIZE_BITS) /* 48 - 30 */
+#define SECTIONS_SHIFT	(MAX_PHYSMEM_BITS - SECTION_SIZE_BITS) /* 48 - 30 = 18*/
 
 
 #define NR_MEM_SECTIONS		(1UL << SECTIONS_SHIFT)
@@ -383,7 +384,7 @@ static void __init alloc_usemap_and_memmap(void (*alloc_func)
 
 	for (pnum = 0; pnum < NR_MEM_SECTIONS; pnum++) {
 		struct mem_section *ms;
-
+		/* 对于不存在内存的section，直接跳过 */
 		if (!present_section_nr(pnum))
 			continue;
 		ms = __nr_to_section(pnum);
@@ -391,6 +392,7 @@ static void __init alloc_usemap_and_memmap(void (*alloc_func)
 		pnum_begin = pnum;
 		break;
 	}
+	/* 退出循环表示找到一个存在内存的section */
 	map_count = 1;
 	for (pnum = pnum_begin + 1; pnum < NR_MEM_SECTIONS; pnum++) {
 		struct mem_section *ms;
@@ -402,9 +404,11 @@ static void __init alloc_usemap_and_memmap(void (*alloc_func)
 		ms = __nr_to_section(pnum);
 		nodeid = sparse_early_nid(ms);
 		if (nodeid == nodeid_begin) {
+			/* map_count表示每个node id映射的个数 */
 			map_count++;
 			continue;
 		}
+		/* 走到这里表示该section已经属于另外一个node                 */
 		/* ok, we need to take cake of from pnum_begin to pnum - 1*/
 		alloc_func(data, pnum_begin, pnum, map_count, nodeid_begin);
 		/* new start, update count etc*/
@@ -461,6 +465,7 @@ struct pglist_data  contig_page_data;
 
 #define NODE_DATA(nid)		(&contig_page_data)
 
+/* pnum_begin:该node    id，开始的section     nr，pnum_end： 该node id对应的结束section nr*/
 static void __init sparse_early_usemaps_alloc_node(void *data,
 				 unsigned long pnum_begin,
 				 unsigned long pnum_end,
@@ -470,12 +475,13 @@ static void __init sparse_early_usemaps_alloc_node(void *data,
 	unsigned long pnum;
 	unsigned long **usemap_map = (unsigned long **)data;
 	int size = usemap_size();
-
+	/* 分配usemap */
 	usemap = sparse_early_usemaps_alloc_pgdat_section(NODE_DATA(nodeid),
 							  size * usemap_count);
 
 
 	for (pnum = pnum_begin; pnum < pnum_end; pnum++) {
+		/* 不存在内存的section，跳过 */
 		if (!present_section_nr(pnum))
 			continue;
 		usemap_map[pnum] = usemap;
