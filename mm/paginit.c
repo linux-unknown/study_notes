@@ -343,11 +343,13 @@ void __init sparse_init(void)
 	size = sizeof(unsigned long *) * NR_MEM_SECTIONS;
 	usemap_map = memblock_virt_alloc(size, 0);
 
+	/* 为每一个node 分配usemap*/
 	alloc_usemap_and_memmap(sparse_early_usemaps_alloc_node,
 							(void *)usemap_map);
 
 
 	for (pnum = 0; pnum < NR_MEM_SECTIONS; pnum++) {
+		/* 非present的section跳过 */
 		if (!present_section_nr(pnum))
 			continue;
 
@@ -355,7 +357,7 @@ void __init sparse_init(void)
 		if (!usemap)
 			continue;
 
-		/* pnum对应的虚拟地址 */
+		/* pnum secton对应的虚拟地址 */
 		map = sparse_early_mem_map_alloc(pnum);
 		if (!map)
 			continue;
