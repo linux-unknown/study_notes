@@ -1,3 +1,55 @@
+#define PAGE_SHIFT		12
+#define PAGE_SIZE		(_AC(1,UL) << PAGE_SHIFT)
+
+
+
+#ifdef CONFIG_SPARSEMEM
+#define MAX_PHYSMEM_BITS	48
+#define SECTION_SIZE_BITS	30
+#endif
+
+
+/* SECTION_SHIFT	#bits space required to store a section # */
+#define SECTIONS_SHIFT	(MAX_PHYSMEM_BITS - SECTION_SIZE_BITS) /* 48 - 30 = 18*/
+
+/* section的个数1G = 1 << MAX_PHYSMEM_BITS / (1 << SECTION_SIZE_BITS ) */
+#define NR_MEM_SECTIONS		(1UL << SECTIONS_SHIFT) 
+
+
+#define PA_SECTION_SHIFT	(SECTION_SIZE_BITS)
+
+#define PFN_SECTION_SHIFT	(SECTION_SIZE_BITS - PAGE_SHIFT) /* 30 - 12 = 18 */
+/* 一个section中包含的页帧 */
+#define PAGES_PER_SECTION       (1UL << PFN_SECTION_SHIFT)
+
+#define PAGE_SECTION_MASK	(~(PAGES_PER_SECTION-1))
+
+
+/* 页帧(pfn)号到section号的转换 */
+#define pfn_to_section_nr(pfn) ((pfn) >> PFN_SECTION_SHIFT) /* 18 */
+
+
+/* 一个root mem_section中有多少个子mem_section */
+#define SECTIONS_PER_ROOT       (PAGE_SIZE / sizeof (struct mem_section))
+
+
+/* 通过SECTION号找到对应的ROOT         section号 */
+#define SECTION_NR_TO_ROOT(sec)	((sec) / SECTIONS_PER_ROOT)
+
+
+
+/* NR_MEM_SECTIONS * SECTIONS_PER_ROOT，ROOT SECTION的数量 */
+#define NR_SECTION_ROOTS	DIV_ROUND_UP(NR_MEM_SECTIONS, SECTIONS_PER_ROOT)
+
+/* 从section中找到对应的node        id */
+#define SECTION_NID_SHIFT	2
+
+#define	SECTION_MARKED_PRESENT	(1UL<<0)
+
+
+struct mem_section *mem_section[NR_SECTION_ROOTS];
+
+
 struct mem_section {
 	/*
 	 * This is, logically, a pointer to an array of struct
@@ -15,14 +67,6 @@ struct mem_section {
 
 	/* See declaration of similar field in struct zone */
 	unsigned long *pageblock_flags;
-#ifdef CONFIG_PAGE_EXTENSION
-	/*
-	 * If !SPARSEMEM, pgdat doesn't have page_ext pointer. We use
-	 * section. (see page_ext.h about this.)
-	 */
-	struct page_ext *page_ext;
-	unsigned long pad;
-#endif
 	/*
 	 * WARNING: mem_section must be a power-of-2 in size for the
 	 * calculation and use of SECTION_ROOT_MASK to make sense.
@@ -51,61 +95,9 @@ void __init paging_init(void)
 	flush_tlb_all();
 }
 
-static void __init map_mem(void)
-{
-	struct memblock_region *reg;
-	phys_addr_t limit;
+#define PFN_UP(x)	(((x) + PAGE_SIZE-1) >> PAGE_SHIFT)
+#define PFN_DOWN(x)	((x) >> PAGE_SHIFT)
 
-	/*
-	 * Temporarily limit the memblock range. We need to do this as
-	 * create_mapping requires puds, pmds and ptes to be allocated from
-	 * memory addressable from the initial direct kernel mapping.
-	 *
-	 * The initial direct kernel mapping, located at swapper_pg_dir, gives
-	 * us PUD_SIZE (4K pages) or PMD_SIZE (64K pages) memory starting from
-	 * PHYS_OFFSET (which must be aligned to 2MB as per
-	 * Documentation/arm64/booting.txt).
-	 */
-
-	limit = PHYS_OFFSET + PUD_SIZE;
-	memblock_set_current_limit(limit);
-
-	/* map all the memory banks */
-	for_each_memblock(memory, reg) {
-		phys_addr_t start = reg->base;
-		phys_addr_t end = start + reg->size;
-
-		if (start >= end)
-			break;
-
-#ifndef CONFIG_ARM64_64K_PAGES
-		/*
-		 * For the first memory bank align the start address and
-		 * current memblock limit to prevent create_mapping() from
-		 * allocating pte page tables from unmapped memory.
-		 * When 64K pages are enabled, the pte page table for the
-		 * first PGDIR_SIZE is already present in swapper_pg_dir.
-		 */
-		if (start < limit)
-			start = ALIGN(start, PMD_SIZE);
-		if (end < limit) {
-			limit = end & PMD_MASK;
-			memblock_set_current_limit(limit);
-		}
-#endif
-		/* 为memblock.memory中的region进行页表映射，而且是线性映射 */
-		__map_memblock(start, end);
-	}
-
-	/* Limit no longer required. */
-	memblock_set_current_limit(MEMBLOCK_ALLOC_ANYWHERE);
-}
-
-static void __init __map_memblock(phys_addr_t start, phys_addr_t end)
-{
-	create_mapping(start, __phys_to_virt(start), end - start,
-			PAGE_KERNEL_EXEC);
-}
 
 void __init bootmem_init(void)
 {
@@ -128,7 +120,18 @@ void __init bootmem_init(void)
 }
 
 
-struct mem_section *mem_section[NR_SECTION_ROOTS];
+/* lowest address */
+phys_addr_t __init_memblock memblock_start_of_DRAM(void)
+{
+	return memblock.memory.regions[0].base;
+}
+
+phys_addr_t __init_memblock memblock_end_of_DRAM(void)
+{
+	int idx = memblock.memory.cnt - 1;
+
+	return (memblock.memory.regions[idx].base + memblock.memory.regions[idx].size);
+}
 
 
 static void arm64_memory_present(void)
@@ -161,50 +164,9 @@ static inline unsigned long memblock_region_memory_end_pfn(const struct memblock
 }
 
 
-
-
-
-
-#ifdef CONFIG_SPARSEMEM
-#define MAX_PHYSMEM_BITS	48
-#define SECTION_SIZE_BITS	30
-#endif
-
-#define PAGE_SHIFT		12
-
-#define PA_SECTION_SHIFT	(SECTION_SIZE_BITS)
-#define PFN_SECTION_SHIFT	(SECTION_SIZE_BITS - PAGE_SHIFT) /* 30 - 12 = 18 */
-
-#define pfn_to_section_nr(pfn) ((pfn) >> PFN_SECTION_SHIFT) /* 18 */
-
-/* 一个section中包含的页 */
-#define PAGES_PER_SECTION       (1UL << PFN_SECTION_SHIFT)
-
-
-#define PAGE_SIZE		(_AC(1,UL) << PAGE_SHIFT)
-
-/* 一个root mem_section中有多少个子mem_section */
-#define SECTIONS_PER_ROOT       (PAGE_SIZE / sizeof (struct mem_section))
-
-#define SECTION_NR_TO_ROOT(sec)	((sec) / SECTIONS_PER_ROOT)
-
-
-/* SECTION_SHIFT	#bits space required to store a section # */
-#define SECTIONS_SHIFT	(MAX_PHYSMEM_BITS - SECTION_SIZE_BITS) /* 48 - 30 = 18*/
-
-
-#define NR_MEM_SECTIONS		(1UL << SECTIONS_SHIFT)
-
-/* NR_MEM_SECTIONS * SECTIONS_PER_ROOT */
-#define NR_SECTION_ROOTS	DIV_ROUND_UP(NR_MEM_SECTIONS, SECTIONS_PER_ROOT)
-
-#define SECTION_NID_SHIFT	2
-
-#define	SECTION_MARKED_PRESENT	(1UL<<0)
-
 /**
  * pfn : addr >>  PAGE_SHIFT
- * section_nr: addr >> (PFN_SECTION_SHIFT + PAGE_SHIFT)
+ * section_nr: pfn >> PFN_SECTION_SHIFT = addr >> (PFN_SECTION_SHIFT + PAGE_SHIFT)
  *
  */
 void __init memory_present(int nid, unsigned long start, unsigned long end)
@@ -222,9 +184,8 @@ void __init memory_present(int nid, unsigned long start, unsigned long end)
 		/* ms为root mem_setcion中对应section的的mem_section */
 		ms = __nr_to_section(section);
 		if (!ms->section_mem_map)
-			/* 表示section已经存在 */
-			ms->section_mem_map = sparse_encode_early_nid(nid) |
-							SECTION_MARKED_PRESENT;
+			/* 标记section已经存在 */
+			ms->section_mem_map = sparse_encode_early_nid(nid) | SECTION_MARKED_PRESENT;
 	}
 }
 
@@ -246,7 +207,6 @@ static inline unsigned long sparse_encode_early_nid(int nid)
 	return (nid << SECTION_NID_SHIFT);
 }
 
-
 static inline struct mem_section *__nr_to_section(unsigned long nr)
 {
 	/* root mem_section是否为空，该值指向子mem_section */
@@ -261,22 +221,19 @@ static inline struct mem_section *__nr_to_section(unsigned long nr)
 	return &mem_section[SECTION_NR_TO_ROOT(nr)][nr & SECTION_ROOT_MASK];
 }
 
-
-
 static int __meminit sparse_index_init(unsigned long section_nr, int nid)
 {
 	/* 
-	 * section_nr / SECTIONS_PER_ROOT
+	 * section_nr / SECTIONS_PER_ROOT，找到该section_nr对应的root号
 	 */
 	unsigned long root = SECTION_NR_TO_ROOT(section_nr);
 	struct mem_section *section;
-
+	/* root section不为空 */
 	if (mem_section[root])
 		return -EEXIST;
 
+	/* 分配 SECTIONS_PER_ROOT * sizeof(struct mem_section)大小内存，并返回地址 */
 	section = sparse_index_alloc(nid);
-	if (!section)
-		return -ENOMEM;
 
 	mem_section[root] = section;
 
@@ -399,7 +356,9 @@ static void __init alloc_usemap_and_memmap(void (*alloc_func)
 		/* 对于不存在内存的section，直接跳过 */
 		if (!present_section_nr(pnum))
 			continue;
+		/* 找到该pnum对应的子section */
 		ms = __nr_to_section(pnum);
+		/* 返回该section的node     id */
 		nodeid_begin = sparse_early_nid(ms);
 		pnum_begin = pnum;
 		break;

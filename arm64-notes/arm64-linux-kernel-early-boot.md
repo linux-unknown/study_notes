@@ -666,7 +666,9 @@ PAGE_OFFSET定义如下，定义在arch\arm64\include\asm\memory.h
  * and PAGE_OFFSET - it must be within 128MB of the kernel text.
  */
 #define VA_BITS			(CONFIG_ARM64_VA_BITS) /*CONFIG_ARM64_VA_BITS = 48*/
-/* kernel image虚拟地址映射的起始地址 */
+/* 
+ * kernel image虚拟地址起始地址，即创建kernel镜像虚拟地址和物理内存地址映射时，以该地址为起始地址 
+ */
 #define PAGE_OFFSET		(UL(0xffffffffffffffff) << (VA_BITS - 1))
 ```
 
