@@ -312,6 +312,15 @@ static struct mem_section noinline __init_refok *sparse_index_alloc(int nid)
 #define section_nr_to_pfn(sec) ((sec) << PFN_SECTION_SHIFT)
 
 
+/* memmap is virtually contiguous.  */
+#define __pfn_to_page(pfn)	(vmemmap + (pfn))
+#define __page_to_pfn(page)	(unsigned long)((page) - vmemmap)
+
+
+#define page_to_pfn __page_to_pfn
+#define pfn_to_page __pfn_to_page
+
+
 void __init sparse_init(void)
 {
 	unsigned long pnum;
@@ -368,6 +377,7 @@ void __init sparse_init(void)
 
 	vmemmap_populate_print_last();
 
+	/* 将usemap_map从reserved中移除，表示不在使用，最终使用usemap*/
 	memblock_free_early(__pa(usemap_map), size);
 }
 
@@ -644,9 +654,6 @@ static struct page __init *sparse_early_mem_map_alloc(unsigned long pnum)
 
 #define vmemmap			((struct page *)(VMALLOC_END + SZ_64K))
 
-/* memmap is virtually contiguous.  */
-#define __pfn_to_page(pfn)	(vmemmap + (pfn))
-#define __page_to_pfn(page)	(unsigned long)((page) - vmemmap)
 
 
 struct page * __meminit sparse_mem_map_populate(unsigned long pnum, int nid)
@@ -655,6 +662,9 @@ struct page * __meminit sparse_mem_map_populate(unsigned long pnum, int nid)
 	unsigned long end;
 	struct page *map;
 
+	/* vmemmap + (pfn) 
+	 * 页帧pgn:pnum * PAGES_PER_SECTION 
+	 */
 	map = pfn_to_page(pnum * PAGES_PER_SECTION);
 	start = (unsigned long)map;
 	end = (unsigned long)(map + PAGES_PER_SECTION);
@@ -708,6 +718,7 @@ static int __meminit sparse_init_one_section(struct mem_section *ms,
 		return -EINVAL;
 
 	ms->section_mem_map &= ~SECTION_MAP_MASK;
+	/* 该sectiong对应的虚拟地址 -         页帧（pfn） */
 	ms->section_mem_map |= sparse_encode_mem_map(mem_map, pnum) | SECTION_HAS_MEM_MAP;
  	ms->pageblock_flags = pageblock_bitmap;
 
@@ -722,5 +733,18 @@ static int __meminit sparse_init_one_section(struct mem_section *ms,
 static unsigned long sparse_encode_mem_map(struct page *mem_map, unsigned long pnum)
 {
 	return (unsigned long)(mem_map - (section_nr_to_pfn(pnum)));
+}
+
+
+static inline void __init memblock_free_early(
+					phys_addr_t base, phys_addr_t size)
+{
+	__memblock_free_early(base, size);
+}
+
+void __init __memblock_free_early(phys_addr_t base, phys_addr_t size)
+{
+	/* 从memblock.reserved中移除 */
+	memblock_remove_range(&memblock.reserved, base, size);
 }
 
