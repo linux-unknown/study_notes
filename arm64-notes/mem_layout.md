@@ -95,7 +95,7 @@ memory：物理内存的大小，由传递给内核的参数决定。
 #define PCI_IO_SIZE		SZ_16M
 /* modules的起始地址，就是PCI_IO的结束地址，2M起隔离作用 */
 #define PCI_IO_END		(MODULES_VADDR - SZ_2M) 
-#define PCI_IO_START	(PCI_IO_END - PCI_IO_SIZE)
+#define PCI_IO_START	        (PCI_IO_END - PCI_IO_SIZE)
 ```
 
 ## fixed
@@ -103,7 +103,7 @@ memory：物理内存的大小，由传递给内核的参数决定。
 ```c
 /* 2M起隔离作用 */
 #define FIXADDR_TOP		(PCI_IO_START - SZ_2M)
-#define FIXADDR_START	(FIXADDR_TOP - FIXADDR_SIZE)
+#define FIXADDR_START	        (FIXADDR_TOP - FIXADDR_SIZE)
 ```
 
 ## vmemmap
