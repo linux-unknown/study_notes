@@ -231,7 +231,7 @@ static inline struct mem_section *__nr_to_section(unsigned long nr)
 	if (!mem_section[SECTION_NR_TO_ROOT(nr)])
 		return NULL;
 	/**
-     * mem_section为一个指针数组，元素类型都是struct mem_section类型的指针
+	 * mem_section为一个指针数组，元素类型都是struct mem_section类型的指针
 	 * mem_section[SECTION_NR_TO_ROOT(nr)][nr & SECTION_ROOT_MASK]可以分开看
 	 * mem_section[SECTION_NR_TO_ROOT(nr)]表示一个struct mem_section的指针，该指针
 	 * 是在sparse_index_init中赋值的。
@@ -279,7 +279,7 @@ void __init sparse_init(void)
 	/* see include/linux/mmzone.h 'struct mem_section' definition */
 	BUILD_BUG_ON(!is_power_of_2(sizeof(struct mem_section)));
 	
-    /* 
+	/* 
 	 * Setup pageblock_order for HUGETLB_PAGE_SIZE_VARIABLE 
 	 * HUGETLB_PAGE_SIZE_VARIABLE没有定义，set_pageblock_order为空
 	 */
