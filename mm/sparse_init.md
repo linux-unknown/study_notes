@@ -411,6 +411,33 @@ static void __init sparse_early_usemaps_alloc_node(void *data, unsigned long pnu
 }
 ```
 
+#### usemap_size
+
+```c
+enum pageblock_bits {
+	PB_migrate,
+	PB_migrate_end = PB_migrate + 3 - 1,
+	/* 3 bits required for migrate types */
+	PB_migrate_skip,/* If set the block is skipped by compaction */
+
+	/*
+	 * Assume the bits will always align on a word. If this assumption
+	 * changes then get/set pageblock needs updating.
+	 */
+	NR_PAGEBLOCK_BITS
+};
+/* 一个section中有多少个pageblock_order，一个pageblock_order使用NR_PAGEBLOCK_BITS位 */
+#define SECTION_BLOCKFLAGS_BITS \
+	((1UL << (PFN_SECTION_SHIFT - pageblock_order)) * NR_PAGEBLOCK_BITS)
+unsigned long usemap_size(void)
+{
+	unsigned long size_bytes;
+	size_bytes = roundup(SECTION_BLOCKFLAGS_BITS, 8) / 8;
+	size_bytes = roundup(size_bytes, sizeof(unsigned long));
+	return size_bytes;
+}
+```
+
 #### sparse_early_mem_map_alloc
 
 ```c
