@@ -304,6 +304,36 @@ typedef struct pglist_data {
 #endif
 } pg_data_t;
 
+truct mem_section {
+	/*
+	 * This is, logically, a pointer to an array of struct
+	 * pages.  However, it is stored with some other magic.
+	 * (see sparse.c::sparse_init_one_section())
+	 *
+	 * Additionally during early boot we encode node id of
+	 * the location of the section here to guide allocation.
+	 * (see sparse.c::memory_present())
+	 *
+	 * Making it a UL at least makes someone do a cast
+	 * before using it wrong.
+	 */
+	unsigned long section_mem_map;
+
+	/* See declaration of similar field in struct zone */
+	unsigned long *pageblock_flags;
+#ifdef CONFIG_PAGE_EXTENSION
+	/*
+	 * If !SPARSEMEM, pgdat doesn't have page_ext pointer. We use
+	 * section. (see page_ext.h about this.)
+	 */
+	struct page_ext *page_ext;
+	unsigned long pad;
+#endif
+	/*
+	 * WARNING: mem_section must be a power-of-2 in size for the
+	 * calculation and use of SECTION_ROOT_MASK to make sense.
+	 */
+};
 
 void __init bootmem_init(void)
 {
@@ -829,13 +859,52 @@ static inline void SetPage##uname(struct page *page)			\
 	static inline void ClearPage##uname(struct page *page)			\
 				{ clear_bit(PG_##lname, &page->flags); }
 
+#define __CLEARPAGEFLAG(uname, lname)					\
+	static inline void __ClearPage##uname(struct page *page)		\
+				{ __clear_bit(PG_##lname, &page->flags); }
+
 
 #define PAGEFLAG(uname, lname) TESTPAGEFLAG(uname, lname)		\
 	SETPAGEFLAG(uname, lname) CLEARPAGEFLAG(uname, lname)
 
 /*宏展开后会定义SetPageReserved等函数*/
-PAGEFLAG(Reserved, reserved) __CLEARPAGEFLAG(Reserved, reserved)
+PAGEFLAG(Reserved, reserved);
+__CLEARPAGEFLAG(Reserved, reserved);
 
+#define HUGETLB_PAGE_ORDER	(HPAGE_SHIFT - PAGE_SHIFT)
+
+/* Huge pages are a constant size */
+#define pageblock_order		HUGETLB_PAGE_ORDER
+
+#define pageblock_nr_pages	(1UL << pageblock_order)
+
+enum {
+	MIGRATE_UNMOVABLE,
+	MIGRATE_RECLAIMABLE,
+	MIGRATE_MOVABLE,
+	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
+	MIGRATE_RESERVE = MIGRATE_PCPTYPES,
+#ifdef CONFIG_CMA
+	/*
+	 * MIGRATE_CMA migration type is designed to mimic the way
+	 * ZONE_MOVABLE works.  Only movable pages can be allocated
+	 * from MIGRATE_CMA pageblocks and page allocator never
+	 * implicitly change migration type of MIGRATE_CMA pageblock.
+	 *
+	 * The way to use it is to change migratetype of a range of
+	 * pageblocks to MIGRATE_CMA which can be done by
+	 * __free_pageblock_cma() function.  What is important though
+	 * is that a range of pageblocks must be aligned to
+	 * MAX_ORDER_NR_PAGES should biggest page be bigger then
+	 * a single pageblock.
+	 */
+	MIGRATE_CMA,
+#endif
+#ifdef CONFIG_MEMORY_ISOLATION
+	MIGRATE_ISOLATE,	/* can't allocate from here */
+#endif
+	MIGRATE_TYPES
+};
 
 /*
  * Initially all pages are reserved - free ones are freed
@@ -889,9 +958,12 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 		 * check here not to call set_pageblock_migratetype() against
 		 * pfn out of zone.
 		 */
-		if ((z->zone_start_pfn <= pfn)
-		    && (pfn < zone_end_pfn(z))
-		    && !(pfn & (pageblock_nr_pages - 1)))
+		/* set_pageblock_migratetype一次设置一个pageblock_nr_pages大小
+		 * pfn & (pageblock_nr_pages - 1)确保在同一个pageblock_nr_pages
+		 * 中的就不用设置了
+		 * 从这可以看出，初始话的时候把所有page都设置为MIGRATE_MOVABLE
+		 */
+		if ((z->zone_start_pfn <= pfn) && (pfn < zone_end_pfn(z)) && !(pfn & (pageblock_nr_pages - 1)))
 			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
 
 		INIT_LIST_HEAD(&page->lru);
@@ -934,4 +1006,138 @@ static inline void page_mapcount_reset(struct page *page)
 {
 	atomic_set(&(page)->_mapcount, -1);
 }
+
+void set_pageblock_migratetype(struct page *page, int migratetype)
+{
+	/* build_all_zonelists会给page_group_by_mobility_disabled赋值，初始化的时候
+	 * build_all_zonelists在该函数之后调用，因此page_group_by_mobility_disabled
+	 * 现在为0
+	 */
+	if (unlikely(page_group_by_mobility_disabled &&
+		     migratetype < MIGRATE_PCPTYPES))
+		migratetype = MIGRATE_UNMOVABLE;
+
+	set_pageblock_flags_group(page, (unsigned long)migratetype,
+					PB_migrate, PB_migrate_end);
+}
+
+/* Bit indices that affect a whole block of pages */
+enum pageblock_bits {
+	PB_migrate,
+	PB_migrate_end = PB_migrate + 3 - 1,
+			/* 3 bits required for migrate types */
+	PB_migrate_skip,/* If set the block is skipped by compaction */
+
+	/*
+	 * Assume the bits will always align on a word. If this assumption
+	 * changes then get/set pageblock needs updating.
+	 */
+	NR_PAGEBLOCK_BITS
+};
+
+
+#define set_pageblock_flags_group(page, flags, start_bitidx, end_bitidx) \
+	set_pfnblock_flags_mask(page, flags, page_to_pfn(page),		\
+			end_bitidx,					\
+			(1 << (end_bitidx - start_bitidx + 1)) - 1)
+
+/**
+ * set_pfnblock_flags_mask - Set the requested group of flags for a pageblock_nr_pages block of pages
+ * @page: The page within the block of interest
+ * @flags: The flags to set
+ * @pfn: The target page frame number
+ * @end_bitidx: The last bit of interest
+ * @mask: mask of bits that the caller is interested in
+ */
+/* end_bitidx:PB_migrate_end */
+void set_pfnblock_flags_mask(struct page *page, unsigned long flags,
+					unsigned long pfn,
+					unsigned long end_bitidx,
+					unsigned long mask)
+{
+	struct zone *zone;
+	unsigned long *bitmap;
+	unsigned long bitidx, word_bitidx;
+	unsigned long old_word, word;
+
+	BUILD_BUG_ON(NR_PAGEBLOCK_BITS != 4);
+
+	zone = page_zone(page);
+	bitmap = get_pageblock_bitmap(zone, pfn);
+	bitidx = pfn_to_bitidx(zone, pfn);
+	word_bitidx = bitidx / BITS_PER_LONG;
+	bitidx &= (BITS_PER_LONG-1);
+
+	VM_BUG_ON_PAGE(!zone_spans_pfn(zone, pfn), page);
+
+	bitidx += end_bitidx;
+	mask <<= (BITS_PER_LONG - bitidx - 1);
+	flags <<= (BITS_PER_LONG - bitidx - 1);
+
+	word = ACCESS_ONCE(bitmap[word_bitidx]);
+	for (;;) {
+		/* 如果ptr和old的值一样，则把new写到ptr内存，否则返回ptr的值，整个操作是原子的 */
+		old_word = cmpxchg(&bitmap[word_bitidx], word, (word & ~mask) | flags);
+		if (word == old_word)
+			break;
+		word = old_word;
+	}
+}
+
+static inline struct zone *page_zone(const struct page *page)
+{
+	return &NODE_DATA(page_to_nid(page))->node_zones[page_zonenum(page)];
+}
+
+int page_to_nid(const struct page *page)
+{
+	return section_to_node_table[page_to_section(page)];
+}
+EXPORT_SYMBOL(page_to_nid);
+
+static inline unsigned long page_to_section(const struct page *page)
+{
+	return (page->flags >> SECTIONS_PGSHIFT) & SECTIONS_MASK;
+}
+
+/* Return a pointer to the bitmap storing bits affecting a block of pages */
+static inline unsigned long *get_pageblock_bitmap(struct zone *zone,
+							unsigned long pfn)
+{
+#ifdef CONFIG_SPARSEMEM
+	return __pfn_to_section(pfn)->pageblock_flags;
+#else
+	return zone->pageblock_flags;
+#endif /* CONFIG_SPARSEMEM */
+}
+
+static inline struct mem_section *__pfn_to_section(unsigned long pfn)
+{
+	return __nr_to_section(pfn_to_section_nr(pfn));
+}
+
+static inline struct mem_section *__nr_to_section(unsigned long nr)
+{
+	if (!mem_section[SECTION_NR_TO_ROOT(nr)])
+		return NULL;
+	return &mem_section[SECTION_NR_TO_ROOT(nr)][nr & SECTION_ROOT_MASK];
+}
+
+#define pfn_to_section_nr(pfn) ((pfn) >> PFN_SECTION_SHIFT)
+
+
+static inline int pfn_to_bitidx(struct zone *zone, unsigned long pfn)
+{
+	pfn &= (PAGES_PER_SECTION-1);
+	return (pfn >> pageblock_order) * NR_PAGEBLOCK_BITS;
+}
+
+#define cmpxchg(ptr, o, n) \
+({ \
+	__typeof__(*(ptr)) __ret; \
+	__ret = (__typeof__(*(ptr))) \
+		__cmpxchg_mb((ptr), (unsigned long)(o), (unsigned long)(n), \
+			     sizeof(*(ptr))); \
+	__ret; \
+})
 
