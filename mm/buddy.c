@@ -1009,12 +1009,12 @@ static inline void page_mapcount_reset(struct page *page)
 
 void set_pageblock_migratetype(struct page *page, int migratetype)
 {
-	/* build_all_zonelists会给page_group_by_mobility_disabled赋值，初始化的时候
+	/**
+	 * build_all_zonelists会给page_group_by_mobility_disabled赋值，初始化的时候
 	 * build_all_zonelists在该函数之后调用，因此page_group_by_mobility_disabled
 	 * 现在为0
 	 */
-	if (unlikely(page_group_by_mobility_disabled &&
-		     migratetype < MIGRATE_PCPTYPES))
+	if (unlikely(page_group_by_mobility_disabled && migratetype < MIGRATE_PCPTYPES))
 		migratetype = MIGRATE_UNMOVABLE;
 
 	set_pageblock_flags_group(page, (unsigned long)migratetype,
