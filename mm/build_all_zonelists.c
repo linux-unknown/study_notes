@@ -1,3 +1,5 @@
+#define MAX_ZONELISTS 1
+
 /*
  * This struct contains information about a zone in a zonelist. It is stored
  * here to avoid dereferences into large structures and lookups of tables
@@ -324,6 +326,13 @@ typedef struct pglist_data {
 } pg_data_t;
 
 
+/*
+ * The total number of pages which are beyond the high watermark within all
+ * zones.
+ */
+unsigned long vm_total_pages;
+#define pageblock_nr_pages	(1UL << pageblock_order)
+
 void  build_all_zonelists(pg_data_t *pgdat, struct zone *zone)
 {
 	set_zonelist_order();
@@ -421,6 +430,7 @@ nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
 
 
 
+
 /* data == NULL */
 static int __build_all_zonelists(void *data)
 {
@@ -485,7 +495,7 @@ static void build_zonelists(pg_data_t *pgdat)
 	local_node = pgdat->node_id;
 
 	zonelist = &pgdat->node_zonelists[0];
-	/* 返回zong的个数 */
+	/* 返回当前node zong的个数 */
 	j = build_zonelists_node(pgdat, zonelist, 0);
 
 	/*
@@ -496,11 +506,15 @@ static void build_zonelists(pg_data_t *pgdat)
 	 * zones coming right after the local ones are those from
 	 * node N+1 (modulo N)
 	 */
+
+	/* 将本节点后面的节点的zone链入zonelist */   
 	for (node = local_node + 1; node < MAX_NUMNODES; node++) {
 		if (!node_online(node))
 			continue;
 		j = build_zonelists_node(NODE_DATA(node), zonelist, j);
 	}
+
+	/* 将本节点前面的节点的zone链入zonelist */
 	for (node = 0; node < local_node; node++) {
 		if (!node_online(node))
 			continue;
@@ -542,10 +556,12 @@ static int build_zonelists_node(pg_data_t *pgdat, struct zonelist *zonelist,
 	do {
 		zone_type--;
 		zone = pgdat->node_zones + zone_type;
+		/* 如果当前zone存在page */
 		if (populated_zone(zone)) {
 			/*
-			 * zonelist->_zonerefs[1].zone = ZONE_DMA
-			 * zonelist->_zonerefs[1].zone_idx = ZONE_DMA
+			 * 将该zone和zone idx保存到zonelist->_zonerefs[nr_zones]中
+			 * nr_zones会连续自加1，最后会将所有onlie node中的有page的
+			 * zone保存到zonelist->_zonerefs中
 			 */
 			zoneref_set_zone(zone, &zonelist->_zonerefs[nr_zones++]);
 			/* 空函数 */
@@ -565,5 +581,115 @@ static void zoneref_set_zone(struct zone *zone, struct zoneref *zoneref)
 {
 	zoneref->zone = zone;
 	zoneref->zone_idx = zone_idx(zone);
+}
+
+/* non-NUMA variant of zonelist performance cache - just NULL zlcache_ptr */
+static void build_zonelist_cache(pg_data_t *pgdat)
+{
+	pgdat->node_zonelists[0].zlcache_ptr = NULL;
+}
+
+/*
+ * Initialize the boot_pagesets that are going to be used
+ * for bootstrapping processors. The real pagesets for
+ * each zone will be allocated later when the per cpu
+ * allocator is available.
+ *
+ * boot_pagesets are used also for bootstrapping offline
+ * cpus if the system is already booted because the pagesets
+ * are needed to initialize allocators on a specific cpu too.
+ * F.e. the percpu allocator needs the page allocator which
+ * needs the percpu allocator in order to allocate its pagesets
+ * (a chicken-egg dilemma).
+ */
+for_each_possible_cpu(cpu) {
+	setup_pageset(&per_cpu(boot_pageset, cpu), 0);
+}
+
+static void setup_pageset(struct per_cpu_pageset *p, unsigned long batch)
+{
+	pageset_init(p);
+	pageset_set_batch(p, batch);
+}
+
+static void pageset_init(struct per_cpu_pageset *p)
+{
+	struct per_cpu_pages *pcp;
+	int migratetype;
+
+	memset(p, 0, sizeof(*p));
+
+	pcp = &p->pcp;
+	pcp->count = 0;
+	for (migratetype = 0; migratetype < MIGRATE_PCPTYPES; migratetype++)
+		INIT_LIST_HEAD(&pcp->lists[migratetype]);
+}
+
+/* a companion to pageset_set_high() */
+static void pageset_set_batch(struct per_cpu_pageset *p, unsigned long batch)
+{
+	pageset_update(&p->pcp, 6 * batch, max(1UL, 1 * batch));
+}
+
+/*
+ * pcp->high and pcp->batch values are related and dependent on one another:
+ * ->batch must never be higher then ->high.
+ * The following function updates them in a safe manner without read side
+ * locking.
+ *
+ * Any new users of pcp->batch and pcp->high should ensure they can cope with
+ * those fields changing asynchronously (acording the the above rule).
+ *
+ * mutex_is_locked(&pcp_batch_high_lock) required when calling this function
+ * outside of boot time (or some other assurance that no concurrent updaters
+ * exist).
+ */
+static void pageset_update(struct per_cpu_pages *pcp, unsigned long high,
+		unsigned long batch)
+{
+       /* start with a fail safe value for batch */
+	pcp->batch = 1;
+	smp_wmb();
+
+       /* Update high, then batch, in order */
+	pcp->high = high;
+	smp_wmb();
+
+	pcp->batch = batch;
+}
+
+unsigned long nr_free_pagecache_pages(void)
+{
+	return nr_free_zone_pages(gfp_zone(GFP_HIGHUSER_MOVABLE));
+}
+
+
+/**
+ * nr_free_zone_pages - count number of pages beyond high watermark
+ * @offset: The zone index of the highest zone
+ *
+ * nr_free_zone_pages() counts the number of counts pages which are beyond the
+ * high watermark within all zones at or below a given zone index.  For each
+ * zone, the number of pages is calculated as:
+ *     managed_pages - high_pages
+ */
+static unsigned long nr_free_zone_pages(int offset)
+{
+	struct zoneref *z;
+	struct zone *zone;
+
+	/* Just pick one node, since fallback list is circular */
+	unsigned long sum = 0;
+
+	struct zonelist *zonelist = node_zonelist(numa_node_id(), GFP_KERNEL);
+
+	for_each_zone_zonelist(zone, z, zonelist, offset) {
+		unsigned long size = zone->managed_pages;
+		unsigned long high = high_wmark_pages(zone);
+		if (size > high)
+			sum += size - high;
+	}
+
+	return sum;
 }
 
