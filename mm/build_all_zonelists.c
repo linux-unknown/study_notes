@@ -356,7 +356,7 @@ void  build_all_zonelists(pg_data_t *pgdat, struct zone *zone)
 	if (vm_total_pages < (pageblock_nr_pages * MIGRATE_TYPES))
 		page_group_by_mobility_disabled = 1;
 	else
-		page_group_by_mobility_disabled = 0;
+		page_group_by_mobility_disabled = 0;/* 当前配置改变量为0 */
 
 	pr_info("Built %i zonelists in %s order, mobility grouping %s.  "
 		"Total pages: %ld\n",
