@@ -1399,6 +1399,13 @@ int mtd_device_parse_register(struct mtd_info *mtd, const char * const *types,
 }
 EXPORT_SYMBOL_GPL(mtd_device_parse_register);
 
+static const char * const default_mtd_part_types[] = {
+	"cmdlinepart",
+	"ofpart",
+	NULL
+};
+
+
 /**
  * parse_mtd_partitions - parse MTD partitions
  * @master: the master partition (describes whole MTD device)
@@ -1435,6 +1442,7 @@ int parse_mtd_partitions(struct mtd_info *master, const char *const *types,
 			parser = get_partition_parser(*types);
 		if (!parser)
 			continue;
+		/* 调用 parse_fn函数，解析分区信息 */
 		ret = (*parser->parse_fn)(master, pparts, data);
 		put_partition_parser(parser);
 		if (ret > 0) {
@@ -1444,5 +1452,678 @@ int parse_mtd_partitions(struct mtd_info *master, const char *const *types,
 		}
 	}
 	return ret;
+}
+
+static LIST_HEAD(part_parsers);
+
+static struct mtd_part_parser *get_partition_parser(const char *name)
+{
+	struct mtd_part_parser *p, *ret = NULL;
+
+	spin_lock(&part_parser_lock);
+	/* 调用register_mtd_parser会往part_parsers链表中添加 */
+	list_for_each_entry(p, &part_parsers, list)
+		/* 如果名称一样，则返回 */
+		if (!strcmp(p->name, name) && try_module_get(p->owner)) {
+			ret = p;
+			break;
+		}
+
+	spin_unlock(&part_parser_lock);
+
+	return ret;
+}
+
+
+/*
+ * This function, given a master MTD object and a partition table, creates
+ * and registers slave MTD objects which are bound to the master according to
+ * the partition definitions.
+ *
+ * We don't register the master, or expect the caller to have done so,
+ * for reasons of data integrity.
+ */
+
+int add_mtd_partitions(struct mtd_info *master,
+		       const struct mtd_partition *parts,
+		       int nbparts)
+{
+	struct mtd_part *slave;
+	uint64_t cur_offset = 0;
+	int i;
+
+	printk(KERN_NOTICE "Creating %d MTD partitions on \"%s\":\n", nbparts, master->name);
+
+	for (i = 0; i < nbparts; i++) {
+		slave = allocate_partition(master, parts + i, i, cur_offset);
+
+		mutex_lock(&mtd_partitions_mutex);
+		/** 添加到mtd_partitions链表中 **/
+		list_add(&slave->list, &mtd_partitions);
+		mutex_unlock(&mtd_partitions_mutex);
+
+		add_mtd_device(&slave->mtd);
+
+		cur_offset = slave->offset + slave->mtd.size;
+	}
+
+	return 0;
+}
+
+static struct mtd_part *allocate_partition(struct mtd_info *master,
+			const struct mtd_partition *part, int partno,
+			uint64_t cur_offset)
+{
+	struct mtd_part *slave;
+	char *name;
+
+	/* allocate the partition structure */
+	slave = kzalloc(sizeof(*slave), GFP_KERNEL);
+	name = kstrdup(part->name, GFP_KERNEL);
+
+	/* set up the MTD object for this partition */
+	slave->mtd.type = master->type;
+	slave->mtd.flags = master->flags & ~part->mask_flags;
+	slave->mtd.size = part->size;
+	slave->mtd.writesize = master->writesize;
+	slave->mtd.writebufsize = master->writebufsize;
+	slave->mtd.oobsize = master->oobsize;
+	slave->mtd.oobavail = master->oobavail;
+	slave->mtd.subpage_sft = master->subpage_sft;
+
+	slave->mtd.name = name;
+	slave->mtd.owner = master->owner;
+
+	/* NOTE:  we don't arrange MTDs as a tree; it'd be error-prone
+	 * to have the same data be in two different partitions.
+	 */
+	slave->mtd.dev.parent = master->dev.parent;
+
+	slave->mtd._read = part_read;
+	slave->mtd._write = part_write;
+
+	if (master->_panic_write)
+		slave->mtd._panic_write = part_panic_write;
+
+	if (master->_point && master->_unpoint) {
+		slave->mtd._point = part_point;
+		slave->mtd._unpoint = part_unpoint;
+	}
+
+	if (master->_get_unmapped_area)
+		slave->mtd._get_unmapped_area = part_get_unmapped_area;
+	if (master->_read_oob)
+		slave->mtd._read_oob = part_read_oob;
+	if (master->_write_oob)
+		slave->mtd._write_oob = part_write_oob;
+	if (master->_read_user_prot_reg)
+		slave->mtd._read_user_prot_reg = part_read_user_prot_reg;
+	if (master->_read_fact_prot_reg)
+		slave->mtd._read_fact_prot_reg = part_read_fact_prot_reg;
+	if (master->_write_user_prot_reg)
+		slave->mtd._write_user_prot_reg = part_write_user_prot_reg;
+	if (master->_lock_user_prot_reg)
+		slave->mtd._lock_user_prot_reg = part_lock_user_prot_reg;
+	if (master->_get_user_prot_info)
+		slave->mtd._get_user_prot_info = part_get_user_prot_info;
+	if (master->_get_fact_prot_info)
+		slave->mtd._get_fact_prot_info = part_get_fact_prot_info;
+	if (master->_sync)
+		slave->mtd._sync = part_sync;
+	if (!partno && !master->dev.class && master->_suspend &&
+	    master->_resume) {
+			slave->mtd._suspend = part_suspend;
+			slave->mtd._resume = part_resume;
+	}
+	if (master->_writev)
+		slave->mtd._writev = part_writev;
+	if (master->_lock)
+		slave->mtd._lock = part_lock;
+	if (master->_unlock)
+		slave->mtd._unlock = part_unlock;
+	if (master->_is_locked)
+		slave->mtd._is_locked = part_is_locked;
+	if (master->_block_isreserved)
+		slave->mtd._block_isreserved = part_block_isreserved;
+	if (master->_block_isbad)
+		slave->mtd._block_isbad = part_block_isbad;
+	if (master->_block_markbad)
+		slave->mtd._block_markbad = part_block_markbad;
+	slave->mtd._erase = part_erase;
+	slave->master = master;
+	slave->offset = part->offset;
+
+	if (slave->offset == MTDPART_OFS_APPEND)
+		slave->offset = cur_offset;
+	if (slave->offset == MTDPART_OFS_NXTBLK) {
+		slave->offset = cur_offset;
+		if (mtd_mod_by_eb(cur_offset, master) != 0) {
+			/* Round up to next erasesize */
+			slave->offset = (mtd_div_by_eb(cur_offset, master) + 1) * master->erasesize;
+			printk(KERN_NOTICE "Moving partition %d: "
+			       "0x%012llx -> 0x%012llx\n", partno,
+			       (unsigned long long)cur_offset, (unsigned long long)slave->offset);
+		}
+	}
+	if (slave->offset == MTDPART_OFS_RETAIN) {
+		slave->offset = cur_offset;
+		if (master->size - slave->offset >= slave->mtd.size) {
+			slave->mtd.size = master->size - slave->offset
+							- slave->mtd.size;
+		} else {
+			printk(KERN_ERR "mtd partition \"%s\" doesn't have enough space: %#llx < %#llx, disabled\n",
+				part->name, master->size - slave->offset,
+				slave->mtd.size);
+			/* register to preserve ordering */
+			goto out_register;
+		}
+	}
+	if (slave->mtd.size == MTDPART_SIZ_FULL)
+		slave->mtd.size = master->size - slave->offset;
+
+	printk(KERN_NOTICE "0x%012llx-0x%012llx : \"%s\"\n", (unsigned long long)slave->offset,
+		(unsigned long long)(slave->offset + slave->mtd.size), slave->mtd.name);
+
+	/* let's do some sanity checks */
+	if (slave->offset >= master->size) {
+		/* let's register it anyway to preserve ordering */
+		slave->offset = 0;
+		slave->mtd.size = 0;
+		printk(KERN_ERR"mtd: partition \"%s\" is out of reach -- disabled\n",
+			part->name);
+		goto out_register;
+	}
+	if (slave->offset + slave->mtd.size > master->size) {
+		slave->mtd.size = master->size - slave->offset;
+		printk(KERN_WARNING"mtd: partition \"%s\" extends beyond the end of device \"%s\" -- size truncated to %#llx\n",
+			part->name, master->name, (unsigned long long)slave->mtd.size);
+	}
+	if (master->numeraseregions > 1) {
+		/* Deal with variable erase size stuff */
+		int i, max = master->numeraseregions;
+		u64 end = slave->offset + slave->mtd.size;
+		struct mtd_erase_region_info *regions = master->eraseregions;
+
+		/* Find the first erase regions which is part of this
+		 * partition. */
+		for (i = 0; i < max && regions[i].offset <= slave->offset; i++)
+			;
+		/* The loop searched for the region _behind_ the first one */
+		if (i > 0)
+			i--;
+
+		/* Pick biggest erasesize */
+		for (; i < max && regions[i].offset < end; i++) {
+			if (slave->mtd.erasesize < regions[i].erasesize) {
+				slave->mtd.erasesize = regions[i].erasesize;
+			}
+		}
+		BUG_ON(slave->mtd.erasesize == 0);
+	} else {
+		/* Single erase size */
+		slave->mtd.erasesize = master->erasesize;
+	}
+
+	if ((slave->mtd.flags & MTD_WRITEABLE) &&
+	    mtd_mod_by_eb(slave->offset, &slave->mtd)) {
+		/* Doesn't start on a boundary of major erase size */
+		/* FIXME: Let it be writable if it is on a boundary of
+		 * _minor_ erase size though */
+		slave->mtd.flags &= ~MTD_WRITEABLE;
+		printk(KERN_WARNING"mtd: partition \"%s\" doesn't start on an erase block boundary -- force read-only\n",
+			part->name);
+	}
+	if ((slave->mtd.flags & MTD_WRITEABLE) &&
+	    mtd_mod_by_eb(slave->mtd.size, &slave->mtd)) {
+		slave->mtd.flags &= ~MTD_WRITEABLE;
+		printk(KERN_WARNING"mtd: partition \"%s\" doesn't end on an erase block -- force read-only\n",
+			part->name);
+	}
+
+	slave->mtd.ecclayout = master->ecclayout;
+	slave->mtd.ecc_step_size = master->ecc_step_size;
+	slave->mtd.ecc_strength = master->ecc_strength;
+	slave->mtd.bitflip_threshold = master->bitflip_threshold;
+
+	if (master->_block_isbad) {
+		uint64_t offs = 0;
+
+		while (offs < slave->mtd.size) {
+			if (mtd_block_isreserved(master, offs + slave->offset))
+				slave->mtd.ecc_stats.bbtblocks++;
+			else if (mtd_block_isbad(master, offs + slave->offset))
+				slave->mtd.ecc_stats.badblocks++;
+			offs += slave->mtd.erasesize;
+		}
+	}
+
+out_register:
+	return slave;
+}
+
+#define MTD_CHAR_MAJOR		90
+#define MTD_DEVT(index) MKDEV(MTD_CHAR_MAJOR, (index)*2)
+
+
+/**
+ *	add_mtd_device - register an MTD device
+ *	@mtd: pointer to new MTD device info structure
+ *
+ *	Add a device to the list of MTD devices present in the system, and
+ *	notify each currently active MTD 'user' of its arrival. Returns
+ *	zero on success or 1 on failure, which currently will only happen
+ *	if there is insufficient memory or a sysfs error.
+ */
+
+int add_mtd_device(struct mtd_info *mtd)
+{
+	struct mtd_notifier *not;
+	int i, error;
+
+	mtd->backing_dev_info = &mtd_bdi;
+
+	BUG_ON(mtd->writesize == 0);
+	mutex_lock(&mtd_table_mutex);
+
+	i = idr_alloc(&mtd_idr, mtd, 0, 0, GFP_KERNEL);
+	if (i < 0)
+		goto fail_locked;
+
+	mtd->index = i;
+	mtd->usecount = 0;
+
+	/* default value if not set by driver */
+	if (mtd->bitflip_threshold == 0)
+		mtd->bitflip_threshold = mtd->ecc_strength;
+
+	if (is_power_of_2(mtd->erasesize))
+		mtd->erasesize_shift = ffs(mtd->erasesize) - 1;
+	else
+		mtd->erasesize_shift = 0;
+
+	if (is_power_of_2(mtd->writesize))
+		mtd->writesize_shift = ffs(mtd->writesize) - 1;
+	else
+		mtd->writesize_shift = 0;
+
+	mtd->erasesize_mask = (1 << mtd->erasesize_shift) - 1;
+	mtd->writesize_mask = (1 << mtd->writesize_shift) - 1;
+
+	/* Some chips always power up locked. Unlock them now */
+	if ((mtd->flags & MTD_WRITEABLE) && (mtd->flags & MTD_POWERUP_LOCK)) {
+		error = mtd_unlock(mtd, 0, mtd->size);
+		if (error && error != -EOPNOTSUPP)
+			printk(KERN_WARNING
+			       "%s: unlock failed, writes may not work\n",
+			       mtd->name);
+	}
+
+	/* Caller should have set dev.parent to match the
+	 * physical device.
+	 */
+	mtd->dev.type = &mtd_devtype;
+	mtd->dev.class = &mtd_class;
+	mtd->dev.devt = MTD_DEVT(i);
+	dev_set_name(&mtd->dev, "mtd%d", i);
+	dev_set_drvdata(&mtd->dev, mtd);
+	/* 注册字符设备驱动，已经注册了MTD_CHAR_MAJOR为主设备号的字符驱动
+	 * 在dev下为mtdX
+	 */
+	if (device_register(&mtd->dev) != 0)
+		goto fail_added;
+
+	/* 在dev下为mtdXro */
+	device_create(&mtd_class, mtd->dev.parent, MTD_DEVT(i) + 1, NULL,
+		      "mtd%dro", i);
+
+	pr_debug("mtd: Giving out device %d to %s\n", i, mtd->name);
+	/* No need to get a refcount on the module containing
+	   the notifier, since we hold the mtd_table_mutex */
+
+	/* register_mtd_user会往mtd_notifiers添加 */
+	list_for_each_entry(not, &mtd_notifiers, list)
+		not->add(mtd);
+
+	mutex_unlock(&mtd_table_mutex);
+	/* We _know_ we aren't being removed, because
+	   our caller is still holding us here. So none
+	   of this try_ nonsense, and no bitching about it
+	   either. :) */
+	__module_get(THIS_MODULE);
+	return 0;
+}
+
+
+int register_mtd_blktrans(struct mtd_blktrans_ops *tr)
+{
+	struct mtd_info *mtd;
+	int ret;
+
+	/* Register the notifier if/when the first device type is
+	   registered, to prevent the link/init ordering from fucking
+	   us over. */
+	if (!blktrans_notifier.list.next)
+		register_mtd_user(&blktrans_notifier);
+
+
+	mutex_lock(&mtd_table_mutex);
+
+	ret = register_blkdev(tr->major, tr->name);
+
+	if (ret)
+		tr->major = ret;
+
+	tr->blkshift = ffs(tr->blksize) - 1;
+
+	INIT_LIST_HEAD(&tr->devs);
+	list_add(&tr->list, &blktrans_majors);
+
+	mtd_for_each_device(mtd)
+		if (mtd->type != MTD_ABSENT)
+			tr->add_mtd(tr, mtd);
+
+	mutex_unlock(&mtd_table_mutex);
+	return 0;
+}
+
+
+static void blktrans_notify_add(struct mtd_info *mtd)
+{
+	struct mtd_blktrans_ops *tr;
+
+	if (mtd->type == MTD_ABSENT)
+		return;
+
+	list_for_each_entry(tr, &blktrans_majors, list)
+		tr->add_mtd(tr, mtd);
+}
+
+static struct mtd_notifier blktrans_notifier = {
+	.add = blktrans_notify_add,
+	.remove = blktrans_notify_remove,
+};
+
+static void mtdblock_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
+{
+	struct mtdblk_dev *dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+
+	if (!dev)
+		return;
+
+	dev->mbd.mtd = mtd;
+	dev->mbd.devnum = mtd->index;
+
+	dev->mbd.size = mtd->size >> 9;
+	dev->mbd.tr = tr;
+
+	if (!(mtd->flags & MTD_WRITEABLE))
+		dev->mbd.readonly = 1;
+
+	if (add_mtd_blktrans_dev(&dev->mbd))
+		kfree(dev);
+}
+
+
+int add_mtd_blktrans_dev(struct mtd_blktrans_dev *new)
+{
+	struct mtd_blktrans_ops *tr = new->tr;
+	struct mtd_blktrans_dev *d;
+	int last_devnum = -1;
+	struct gendisk *gd;
+	int ret;
+
+	if (mutex_trylock(&mtd_table_mutex)) {
+		mutex_unlock(&mtd_table_mutex);
+		BUG();
+	}
+
+	mutex_lock(&blktrans_ref_mutex);
+	list_for_each_entry(d, &tr->devs, list) {
+		if (new->devnum == -1) {
+			/* Use first free number */
+			if (d->devnum != last_devnum+1) {
+				/* Found a free devnum. Plug it in here */
+				new->devnum = last_devnum+1;
+				list_add_tail(&new->list, &d->list);
+				goto added;
+			}
+		} else if (d->devnum == new->devnum) {
+			/* Required number taken */
+			mutex_unlock(&blktrans_ref_mutex);
+			return -EBUSY;
+		} else if (d->devnum > new->devnum) {
+			/* Required number was free */
+			list_add_tail(&new->list, &d->list);
+			goto added;
+		}
+		last_devnum = d->devnum;
+	}
+
+	ret = -EBUSY;
+	if (new->devnum == -1)
+		new->devnum = last_devnum+1;
+
+	/* Check that the device and any partitions will get valid
+	 * minor numbers and that the disk naming code below can cope
+	 * with this number. */
+	if (new->devnum > (MINORMASK >> tr->part_bits) ||
+	    (tr->part_bits && new->devnum >= 27 * 26)) {
+		mutex_unlock(&blktrans_ref_mutex);
+		goto error1;
+	}
+
+	list_add_tail(&new->list, &tr->devs);
+ added:
+	mutex_unlock(&blktrans_ref_mutex);
+
+	mutex_init(&new->lock);
+	kref_init(&new->ref);
+	if (!tr->writesect)
+		new->readonly = 1;
+
+	/* Create gendisk */
+	/* 注册块设备驱动 */
+	ret = -ENOMEM;
+	gd = alloc_disk(1 << tr->part_bits);
+
+	new->disk = gd;
+	gd->private_data = new;
+	gd->major = tr->major;
+	gd->first_minor = (new->devnum) << tr->part_bits;
+	gd->fops = &mtd_block_ops;
+
+	if (tr->part_bits)
+		if (new->devnum < 26)
+			snprintf(gd->disk_name, sizeof(gd->disk_name),
+				 "%s%c", tr->name, 'a' + new->devnum);
+		else
+			snprintf(gd->disk_name, sizeof(gd->disk_name),
+				 "%s%c%c", tr->name,
+				 'a' - 1 + new->devnum / 26,
+				 'a' + new->devnum % 26);
+	else
+		snprintf(gd->disk_name, sizeof(gd->disk_name),
+			 "%s%d", tr->name, new->devnum);
+
+	set_capacity(gd, (new->size * tr->blksize) >> 9);
+
+	/* Create the request queue */
+	spin_lock_init(&new->queue_lock);
+	new->rq = blk_init_queue(mtd_blktrans_request, &new->queue_lock);
+
+	if (tr->flush)
+		blk_queue_flush(new->rq, REQ_FLUSH);
+
+	new->rq->queuedata = new;
+	blk_queue_logical_block_size(new->rq, tr->blksize);
+
+	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, new->rq);
+	queue_flag_clear_unlocked(QUEUE_FLAG_ADD_RANDOM, new->rq);
+
+	if (tr->discard) {
+		queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, new->rq);
+		new->rq->limits.max_discard_sectors = UINT_MAX;
+	}
+
+	gd->queue = new->rq;
+
+	/* Create processing workqueue */
+	new->wq = alloc_workqueue("%s%d", 0, 0,
+				  tr->name, new->mtd->index);
+
+	INIT_WORK(&new->work, mtd_blktrans_work);
+
+	gd->driverfs_dev = &new->mtd->dev;
+
+	if (new->readonly)
+		set_disk_ro(gd, 1);
+
+	add_disk(gd);
+
+	if (new->disk_attributes) {
+		ret = sysfs_create_group(&disk_to_dev(gd)->kobj,
+					new->disk_attributes);
+		WARN_ON(ret);
+	}
+	return 0;
+}
+
+
+static struct mtd_blktrans_ops mtdblock_tr = {
+	.name		= "mtdblock",
+	.major		= MTD_BLOCK_MAJOR,
+	.part_bits	= 0,
+	.blksize 	= 512,
+	.readsect	= mtdblock_readsect,
+	.writesect	= mtdblock_writesect,
+	.add_mtd	= mtdblock_add_mtd,
+	.remove_dev	= mtdblock_remove_dev,
+	.owner		= THIS_MODULE,
+};
+
+static int __init mtdblock_init(void)
+{
+	return register_mtd_blktrans(&mtdblock_tr);
+}
+
+
+static int __init init_mtd(void)
+{
+	int ret;
+
+	ret = class_register(&mtd_class);
+
+	ret = mtd_bdi_init(&mtd_bdi, "mtd");
+
+	proc_mtd = proc_create("mtd", 0, NULL, &mtd_proc_ops);
+
+	ret = init_mtdchar();
+
+	return 0;
+}
+
+module_init(init_mtd);
+
+int __init init_mtdchar(void)
+{
+	int ret;
+
+	ret = __register_chrdev(MTD_CHAR_MAJOR, 0, 1 << MINORBITS,
+				   "mtd", &mtd_fops);
+
+	return ret;
+}
+
+
+static int parse_ofpart_partitions(struct mtd_info *master,
+				   struct mtd_partition **pparts,
+				   struct mtd_part_parser_data *data)
+{
+	struct device_node *node;
+	const char *partname;
+	struct device_node *pp;
+	int nr_parts, i;
+
+
+	if (!data)
+		return 0;
+
+	node = data->of_node;
+	if (!node)
+		return 0;
+
+	/* First count the subnodes */
+	nr_parts = 0;
+	for_each_child_of_node(node,  pp) {
+		if (node_has_compatible(pp))
+			continue;
+
+		nr_parts++;
+	}
+
+	if (nr_parts == 0)
+		return 0;
+
+	*pparts = kzalloc(nr_parts * sizeof(**pparts), GFP_KERNEL);
+	if (!*pparts)
+		return -ENOMEM;
+
+	i = 0;
+	for_each_child_of_node(node,  pp) {
+		const __be32 *reg;
+		int len;
+		int a_cells, s_cells;
+
+		if (node_has_compatible(pp))
+			continue;
+
+		reg = of_get_property(pp, "reg", &len);
+		if (!reg) {
+			nr_parts--;
+			continue;
+		}
+
+		a_cells = of_n_addr_cells(pp);
+		s_cells = of_n_size_cells(pp);
+		(*pparts)[i].offset = of_read_number(reg, a_cells);
+		(*pparts)[i].size = of_read_number(reg + a_cells, s_cells);
+
+		partname = of_get_property(pp, "label", &len);
+		if (!partname)
+			partname = of_get_property(pp, "name", &len);
+		(*pparts)[i].name = partname;
+
+		if (of_get_property(pp, "read-only", &len))
+			(*pparts)[i].mask_flags |= MTD_WRITEABLE;
+
+		if (of_get_property(pp, "lock", &len))
+			(*pparts)[i].mask_flags |= MTD_POWERUP_LOCK;
+
+		i++;
+	}
+
+	if (!i) {
+		of_node_put(pp);
+		pr_err("No valid partition found on %s\n", node->full_name);
+		kfree(*pparts);
+		*pparts = NULL;
+		return -EINVAL;
+	}
+	/* 返回分区的数目 */
+	return nr_parts;
+}
+
+
+static struct mtd_part_parser ofpart_parser = {
+	.owner = THIS_MODULE,
+	.parse_fn = parse_ofpart_partitions,
+	.name = "ofpart",
+};
+
+static int __init ofpart_parser_init(void)
+{
+	register_mtd_parser(&ofpart_parser);
+	register_mtd_parser(&ofoldpart_parser);
+	return 0;
 }
 
