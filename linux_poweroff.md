@@ -141,7 +141,7 @@ static void kernel_shutdown_prepare(enum system_states state)
 }
 ```
 
-可以使用register_reboot_notifier注册对SYS_HALT,SYS_POWER_OFF关系事件的回调函数
+可以使用register_reboot_notifier注册对SYS_HALT,SYS_POWER_OFF关心事件的回调函数
 
 ##### device_shutdown
 
@@ -160,7 +160,7 @@ void device_shutdown(void)
 	 * devices offline, even as the system is shutting down.
 	 */
 	while (!list_empty(&devices_kset->list)) {
- 		/*list为双向链表，从最后一个网前开始查找*/
+ 		/*list为双向链表，从最后一个往前开始查找*/
 		dev = list_entry(devices_kset->list.prev, struct device,
 				kobj.entry);
 
@@ -187,7 +187,7 @@ void device_shutdown(void)
 		pm_runtime_get_noresume(dev);
 		pm_runtime_barrier(dev);
       
-      	/**
+      		/**
  		 *bus所能关闭的电源智能是bus上的从设备，bus控制器并不在该bus的管理范围内。
  		 *bus控制器的device和driver通常是挂载platform虚拟总线上的类型的。
  		 *从内核的代码看，并没有多少驱动实现shotdown函数，应该是关机的时序不是很重
@@ -301,7 +301,7 @@ struct bus_type i2c_bus_type = {
 ###### i2c_device_shutdown
 ```c
 /**
- *bus所能关闭的电源智能是bus上的从设备，bus控制器并不在该bus的管理范围内
+ *bus所能关闭的电源只能是bus上的从设备，bus控制器并不在该bus的管理范围内
  *bus控制器的device和driver通常是platform类型的。
  */
 static void i2c_device_shutdown(struct device *dev)
@@ -319,7 +319,7 @@ static void i2c_device_shutdown(struct device *dev)
 
 ---
 
-syscore_shutdown应该使系统核心设备，所以关闭比较靠后，从内核代码来看，多试一些clock。
+syscore_shutdown应该使系统核心设备，所以关闭比较靠后，从内核代码来看，多是一些clock。
 
 #### machine_power_off
 
