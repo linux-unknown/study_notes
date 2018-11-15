@@ -190,7 +190,7 @@ static void __sched __schedule(void)
      * state： -1 unrunnable, 0 runnable, >0 stopped
      */
 	if (prev->state && !(preempt_count() & PREEMPT_ACTIVE)) {
-        /*判断有没有信号要处理，如果有这把prev->state = TASK_RUNNING*/
+        /*判断有没有信号要处理，如果有则把prev->state = TASK_RUNNING*/
 		if (unlikely(signal_pending_state(prev->state, prev))) {
 			prev->state = TASK_RUNNING;
 		} else {
@@ -215,9 +215,9 @@ static void __sched __schedule(void)
 	/*如果task->on_rq为1，如果没有执行上面else路径则这种情况会成立*/
 	if (task_on_rq_queued(prev))
 		update_rq_clock(rq);
-	/*选择先一个进程，会调用到调度了中的pick_next_task*/
+	/*选择下一个进程，会调用到调度了中的pick_next_task*/
 	next = pick_next_task(rq, prev);
-    /*清楚TIF_NEED_RESCHED标志*/
+    /*清除TIF_NEED_RESCHED标志*/
 	clear_tsk_need_resched(prev);
     /*该函数除了x86，其他平台为空函数*/
 	clear_preempt_need_resched();
@@ -320,9 +320,13 @@ context_switch(struct rq *rq, struct task_struct *prev,
 		next->active_mm = oldmm;
 		atomic_inc(&oldmm->mm_count);/*增加引用计数，在什么时候减少*/
 		enter_lazy_tlb(oldmm, next);
-	} else
-		switch_mm(oldmm, mm, next);
-
+	} else ｛
+		/* 
+		 * switch_mm用来切换进程的页表
+		 * 将next的pgd赋值给ttbr0_el1 
+		 */
+        switch_mm(oldmm, mm, next);
+	｝
 	if (!prev->mm) {/*表示是kernel 线程*/
 		prev->active_mm = NULL;
         /*
@@ -407,9 +411,9 @@ static inline void check_and_switch_context(struct mm_struct *mm,
 		 * Defer the new ASID allocation until after the context
 		 * switch critical region since __new_context() cannot be
 		 * called with interrupts disabled.
-		 * 延迟新的ASID分配。直到到context switch 临界区之后，由于__new_context()
+		 * 延迟新的ASID分配。直到context switch 临界区之后，由于__new_context()
 		 * 不能在中断禁止情况下调用。
-		 * 进入该路径，只会设置一个flag，在finish_task_switch只会会进行处理。
+		 * 进入该路径，只会设置一个flag，在finish_task_switch会进行处理。
 		 * 对于一个新的进程mm->pgd会分配一个新的，执行到该path，用户空间页表是空的。
 		 */
 		set_ti_thread_flag(task_thread_info(tsk), TIF_SWITCH_MM);
