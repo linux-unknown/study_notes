@@ -291,7 +291,7 @@ The main means of driving the scheduler and thus entering this function are:
 
 WARNING: all callers must re-check need_resched() afterward and reschedule accordingly in case an event triggered the need for rescheduling (such as an interrupt waking up a task) while preemption was disabled in __schedule().
 
-**警告：在这之后所有的调用这必须重新检查need_resched()，并行重新调度，以防事件触发重新调度（比如中断唤醒一个task），由于在__schedule()中，抢占是禁止的。**
+**警告：在这之后所有的调用这必须重新检查need_resched()，并相应的重新调度，万一一个事件触发重新调度的需求（比如中断唤醒一个task），由于在__schedule()中，抢占是禁止的。**
 
 ### context_switch
 
