@@ -66,11 +66,11 @@ signed long __sched schedule_timeout(signed long timeout)
 	}
 	expire = timeout + jiffies;
 	setup_timer_on_stack(&timer, process_timeout, (unsigned long)current);
-    /*创建一个timer，定时器的超时值为睡眠时间*/
+	/*创建一个timer，定时器的超时值为睡眠时间*/
 	__mod_timer(&timer, expire, false, TIMER_NOT_PINNED);
-    /*执行调度函数，切换到其他进程*/
+	/*执行调度函数，切换到其他进程*/
 	schedule();
-    /*重启调度回来之后，删除timer*/
+	/*重启调度回来之后，删除timer*/
 	del_singleshot_timer_sync(&timer);
 	/* Remove the timer from the object tracker */
 	destroy_timer_on_stack(&timer);
@@ -96,7 +96,7 @@ static void process_timeout(unsigned long __data)
 asmlinkage __visible void __sched schedule(void)
 {
 	struct task_struct *tsk = current;
-    /*注释中是用于避免死锁的，和块设备相关*/
+	/*注释中解释是用于避免死锁的，和块设备相关*/
 	sched_submit_work(tsk);
 	do {
 		__schedule();
@@ -184,13 +184,13 @@ static void __sched __schedule(void)
 	rq->clock_skip_update <<= 1; /* promote REQ to ACT */
 
 	switch_count = &prev->nivcsw;
-    /*
-     * 如果是内核抢占，preempt_count() & PREEMPT_ACTIVE会不为0
-     * 也可看出如果是kernel抢占，则不会调用deactivate_task
-     * state： -1 unrunnable, 0 runnable, >0 stopped
-     */
+	/*
+	 * 如果是内核抢占，preempt_count() & PREEMPT_ACTIVE会不为0
+	 * 也可看出如果是kernel抢占，则不会调用deactivate_task
+	 * state： -1 unrunnable, 0 runnable, >0 stopped
+	 */
 	if (prev->state && !(preempt_count() & PREEMPT_ACTIVE)) {
-        /*判断有没有信号要处理，如果有则把prev->state = TASK_RUNNING*/
+		/*判断有没有信号要处理，如果有则把prev->state = TASK_RUNNING*/
 		if (unlikely(signal_pending_state(prev->state, prev))) {
 			prev->state = TASK_RUNNING;
 		} else {
@@ -215,11 +215,11 @@ static void __sched __schedule(void)
 	/*如果task->on_rq为1，如果没有执行上面else路径则这种情况会成立*/
 	if (task_on_rq_queued(prev))
 		update_rq_clock(rq);
-	/*选择下一个进程，会调用到调度了中的pick_next_task*/
+    /*选择下一个进程，会调用到调度了中的pick_next_task*/
 	next = pick_next_task(rq, prev);
-    /*清除TIF_NEED_RESCHED标志*/
+	/*清除TIF_NEED_RESCHED标志*/
 	clear_tsk_need_resched(prev);
-    /*该函数除了x86，其他平台为空函数*/
+	/*该函数除了x86，其他平台为空函数*/
 	clear_preempt_need_resched();
 	rq->clock_skip_update = 0;
 
