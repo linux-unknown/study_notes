@@ -155,13 +155,19 @@ static void __sched __schedule(void)
 	unsigned long *switch_count;
 	struct rq *rq;
 	int cpu;
-	/*禁止抢占*/
+	/*禁止抢占，thread_info的preempt_count加1，preempt_count为0表示可以抢占*/
 	preempt_disable();
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
 	rcu_note_context_switch();
 	prev = rq->curr;
-
+    
+	/* 检查是否在atomic，如果在atomic则报错 
+	 * preempt_count() & ~PREEMPT_ACTIVE) != PREEMPT_CHECK_OFFSET则表示在atomic
+	 * PREEMPT_CHECK_OFFSET为1，
+	 * 因为在这之前调用了preempt_disable()，所以 preempt_count() & ~PREEMPT_ACTIVE)应为1
+	 * preempt_disable()和preempt_enable()要成对调用，可以嵌套调用。
+	 */
 	schedule_debug(prev);
 	/* 
 	 * 如果支持HRTICK feature，则取消hrtick_clear
@@ -927,7 +933,7 @@ __preempt_count_sub(PREEMPT_ACTIVE);
 
 先是调用了`__preempt_count_add(PREEMPT_ACTIVE);`然后调用`__schedule();`这样是不是表示在没有调用`local_irq_disable();`之前系统是不可抢占呢？但是调用`__preempt_count_sub(PREEMPT_ACTIVE);`的时机应该是在重新调度道该task才会调用`__preempt_count_sub(PREEMPT_ACTIVE);`这不知道需要什么时候。
 
-起始看下`__preempt_count_add(PREEMPT_ACTIVE);`的实现
+其实看下`__preempt_count_add(PREEMPT_ACTIVE);`的实现
 
 ```c
 static __always_inline void __preempt_count_add(int val)
@@ -945,7 +951,7 @@ static __always_inline int *preempt_count_ptr(void)
 
 **可以看出是否可以抢占其实只是针对该task的，该task不能抢占，并不表示要运行的task不能抢占。**
 
-在后面的kenrel中PREEMPT_ACTIVE已经被去掉了，`__schedule`变成了`static void __sched __schedule(bool preempt)`增加了一个参数，表示是不是kernel抢占。这样显得更合理。个人感觉使用PREEMPT_ACTIVE显得比较别扭。
+在后面的kenrel版本中PREEMPT_ACTIVE已经被去掉了，`__schedule`变成了`static void __sched __schedule(bool preempt)`增加了一个参数，表示是不是kernel抢占。这样显得更合理。个人感觉使用PREEMPT_ACTIVE显得比较别扭。
 
 ## ASID
 
