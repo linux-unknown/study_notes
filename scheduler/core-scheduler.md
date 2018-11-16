@@ -215,7 +215,7 @@ static void __sched __schedule(void)
 	/*如果task->on_rq为1，如果没有执行上面else路径则这种情况会成立*/
 	if (task_on_rq_queued(prev))
 		update_rq_clock(rq);
-    /*选择下一个进程，会调用到调度了中的pick_next_task*/
+	/*选择下一个进程，会调用到调度了中的pick_next_task*/
 	next = pick_next_task(rq, prev);
 	/*清除TIF_NEED_RESCHED标志*/
 	clear_tsk_need_resched(prev);
@@ -329,10 +329,10 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	｝
 	if (!prev->mm) {/*表示是kernel 线程*/
 		prev->active_mm = NULL;
-        /*
-         * 如果之前的也是kernel线程，则将之前的mm保存到run qeue中
-         * 如果是用户进程之间切换，rq->prev_mm为NULL
-         */
+		/*
+		 * 如果之前的也是kernel线程，则将之前的mm保存到run qeue中
+		 * 如果是用户进程之间切换，rq->prev_mm为NULL
+		 */
 		rq->prev_mm = oldmm;
 	}
 	/*
@@ -368,9 +368,9 @@ switch_mm(struct mm_struct *prev, struct mm_struct *next, struct task_struct *ts
 	 * 初始化为init_mm。什么时候mm赋值为init_mm？,在idle_task_exit中next会为init_mm
 	 */
 	if (next == &init_mm) {
-        /*
-         * Set TTBR0 to empty_zero_page. No translations will be possible via TTBR0
-         */
+		/*
+		 * Set TTBR0 to empty_zero_page. No translations will be possible via TTBR0
+		 */
 		cpu_set_reserved_ttbr0();
 		return;
 	}
@@ -669,7 +669,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
 {
 	/*调用之后就会切换到next task*/
 	last = cpu_switch_to(prev, next);
-    /*重新调用到prev进程后执行*/
+	/*重新调用到prev进程后执行*/
 	return last;
 }
 ```
@@ -708,12 +708,12 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	finish_arch_post_lock_switch();
 
 	fire_sched_in_preempt_notifiers(current);
-    /*
-     * mm =  rq->prev_mm
-     * 如果切换的时候prev为内核线程，会将rq->prev_mm设置为oldmm，其他情况rq->prev_mm都
-     * 为NULL，如果mm不为NULL则表示之前在进程切换的时候，借用了其他用户空间的进程，
-     * mmdrop中会对mm->mm_count减1
-     */
+	/*
+	 * mm =  rq->prev_mm
+	 * 如果切换的时候prev为内核线程，会将rq->prev_mm设置为oldmm，其他情况rq->prev_mm都
+	 * 为NULL，如果mm不为NULL则表示之前在进程切换的时候，借用了其他用户空间的进程，
+	 * mmdrop中会对mm->mm_count减1
+	 */
 	if (mm)
 		mmdrop(mm);
 	if (unlikely(prev_state == TASK_DEAD)) {
@@ -975,4 +975,4 @@ CPU上运行了若干的用户空间的进程和内核线程，为了加快性�
 
 有了ASID的支持后，A进程切换到B进程再也不需要flush tlb了，因为A进程执行时候缓存在TLB中的残留A地址空间相关的entry不会影响到B进程，虽然A和B可能有相同的VA，但是ASID保证了硬件可以区分A和B进程地址空间。
 
-ASID部分机会全部引用http://www.wowotech.net/process_management/context-switch-tlb.html
+ASID部分分析引用自http://www.wowotech.net/process_management/context-switch-tlb.html
