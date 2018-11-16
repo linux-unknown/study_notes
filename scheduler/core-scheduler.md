@@ -814,13 +814,13 @@ for (;;) {
 }
 ```
 
-第一种情形：
+**第一种情形：**
 
-	在第二行中，如果设置了task的状态（state不为0），但是还没有将该task添加到wq中，这个时候如果出现了kernel抢占，如果不判断preempt_count() & PREEMPT_ACTIVE)，那么就会执行`deactivate_task(rq, prev, DEQUEUE_SLEEP);`将该task中run queue中移除，这个时候没有机会将该task添加到run queue中，那么该task将没有机会在运行了。调用wake_up，这时等待对了中是没有该task的。
+在第二行中，如果设置了task的状态（state不为0），但是还没有将该task添加到wq中，这个时候如果出现了kernel抢占，如果不判断preempt_count() & PREEMPT_ACTIVE)，那么就会执行`deactivate_task(rq, prev, DEQUEUE_SLEEP);`将该task中run queue中移除，这个时候没有机会将该task添加到run queue中，那么该task将没有机会在运行了。调用wake_up，这时等待对了中是没有该task的。
 
-第二种情形：
+**第二种情形：**
 
-	已经执行了schedule，然后等到了wake_up，这个时候该进程不唤醒重新调用prepare_to_wait，如果这个时候，发生了内核抢占，如果没有preempt_count() & PREEMPT_ACTIVE)检查，则该进程也会被移除等待队列，**如果只有这一次wake_up**,那么该task以后也没有机会执行了。
+已经执行了schedule，然后等到了wake_up，这个时候该进程不唤醒重新调用prepare_to_wait，如果这个时候，发生了内核抢占，如果没有preempt_count() & PREEMPT_ACTIVE)检查，则该进程也会被移除等待队列，**如果只有这一次wake_up**,那么该task以后也没有机会执行了。
 
 #### 中断上下文进入抢占
 
