@@ -610,7 +610,6 @@ static int xpsgtr_probe(struct platform_device *pdev)
 ### devm_of_phy_provider_register
 
 ```c
-
 #define	devm_of_phy_provider_register(dev, xlate)	\
 	__devm_of_phy_provider_register((dev), NULL, THIS_MODULE, (xlate))
 
@@ -750,5 +749,152 @@ static struct phy *xpsgtr_xlate(struct device *dev,
 	/* Should not reach here */
 	return ERR_PTR(-EINVAL);
 }
+```
+
+
+
+## dwc3/core.c
+
+```
+static struct platform_driver dwc3_driver = {
+	.probe		= dwc3_probe,
+	.remove		= dwc3_remove,
+	.driver		= {
+		.name	= "dwc3",
+		.of_match_table	= of_match_ptr(of_dwc3_match),
+		.acpi_match_table = ACPI_PTR(dwc3_acpi_match),
+		.pm	= &dwc3_dev_pm_ops,
+	},
+};
+module_platform_driver(dwc3_driver);
+```
+
+### dwc3_probe
+
+```
+static int dwc3_probe(struct platform_device *pdev)
+{
+	struct device		*dev = &pdev->dev;
+	struct resource		*res, dwc_res;
+	struct dwc3		*dwc;
+	int			ret;
+	u32			mdwidth;
+	void __iomem		*regs;
+
+	dwc = devm_kzalloc(dev, sizeof(*dwc), GFP_KERNEL);
+
+	dwc->clks = devm_kmemdup(dev, dwc3_core_clks, sizeof(dwc3_core_clks), GFP_KERNEL);
+	dwc->dev = dev;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+	dwc->xhci_resources[0].start = res->start;
+	dwc->xhci_resources[0].end = dwc->xhci_resources[0].start + DWC3_XHCI_REGS_END;
+	dwc->xhci_resources[0].flags = res->flags;
+	dwc->xhci_resources[0].name = res->name;
+
+	/*
+	 * Request memory region but exclude xHCI regs,
+	 * since it will be requested by the xhci-plat driver.
+	 */
+	dwc_res = *res;
+	dwc_res.start += DWC3_GLOBALS_REGS_START;
+
+	regs = devm_ioremap_resource(dev, &dwc_res);
+	dwc->regs	= regs;
+	dwc->regs_size	= resource_size(&dwc_res);
+
+	dwc3_get_properties(dwc);
+
+	dwc->reset = devm_reset_control_get_optional_shared(dev, NULL);
+
+	if (dev->of_node) {
+		dwc->num_clks = ARRAY_SIZE(dwc3_core_clks);
+
+		ret = clk_bulk_get(dev, dwc->num_clks, dwc->clks);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+		/*
+		 * Clocks are optional, but new DT platforms should support all
+		 * clocks as required by the DT-binding.
+		 */
+		if (ret)
+			dwc->num_clks = 0;
+	}
+
+	ret = reset_control_deassert(dwc->reset);
+
+
+	ret = clk_bulk_prepare(dwc->num_clks, dwc->clks);
+
+
+	ret = clk_bulk_enable(dwc->num_clks, dwc->clks);
+
+
+	platform_set_drvdata(pdev, dwc);
+	dwc3_cache_hwparams(dwc);
+
+	spin_lock_init(&dwc->lock);
+
+	/* Set dma coherent mask to DMA BUS data width */
+	mdwidth = DWC3_GHWPARAMS0_MDWIDTH(dwc->hwparams.hwparams0);
+	dev_dbg(dev, "Enabling %d-bit DMA addresses.\n", mdwidth);
+	dma_set_coherent_mask(dev, DMA_BIT_MASK(mdwidth));
+
+	pm_runtime_set_active(dev);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_set_autosuspend_delay(dev, DWC3_DEFAULT_AUTOSUSPEND_DELAY);
+	pm_runtime_enable(dev);
+	ret = pm_runtime_get_sync(dev);
+	pm_runtime_forbid(dev);
+
+	ret = dwc3_alloc_event_buffers(dwc, DWC3_EVENT_BUFFERS_SIZE);
+	ret = dwc3_get_dr_mode(dwc);
+
+
+	ret = dwc3_core_init(dwc);
+	if (ret) {
+		dev_err(dev, "failed to initialize core\n");
+		goto err4;
+	}
+
+	dwc3_check_params(dwc);
+
+	ret = dwc3_core_init_mode(dwc);
+	if (ret)
+		goto err5;
+
+	dwc3_debugfs_init(dwc);
+	pm_runtime_put(dev);
+
+	return 0;
+
+err5:
+	dwc3_event_buffers_cleanup(dwc);
+
+err4:
+	dwc3_free_scratch_buffers(dwc);
+
+err3:
+	dwc3_free_event_buffers(dwc);
+
+err2:
+	pm_runtime_allow(&pdev->dev);
+
+err1:
+	pm_runtime_put_sync(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
+
+	clk_bulk_disable(dwc->num_clks, dwc->clks);
+unprepare_clks:
+	clk_bulk_unprepare(dwc->num_clks, dwc->clks);
+assert_reset:
+	reset_control_assert(dwc->reset);
+put_clks:
+	clk_bulk_put(dwc->num_clks, dwc->clks);
+
+	return ret;
+}
+
 ```
 
