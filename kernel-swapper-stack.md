@@ -112,7 +112,7 @@ union thread_union {
 ### init_thread_union初始化
 
 ```c
-/* tsk为init_task */
+/* task为init_task */
 #define INIT_THREAD_INFO(tsk)						\
 {									\
 	.task		= &tsk,						\
