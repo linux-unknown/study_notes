@@ -6,135 +6,7 @@ memblock是linux kernel在伙伴系统还没有完成初始的时候用来进行
 
 从linux的代码执行流程看，memblock是和架构相关的，我们只关注arm64。
 
-## memblock初始化
-### arm64_memblock_init
-```c
-void __init setup_arch(char **cmdline_p)
-{
-	/* 最早调用和memblock相关的是在该函数中 */
-	setup_machine_fdt(__fdt_pointer);
-
-	init_mm.start_code = (unsigned long) _text;
-	init_mm.end_code   = (unsigned long) _etext;
-	init_mm.end_data   = (unsigned long) _edata;
-	init_mm.brk	   = (unsigned long) _end;
-
-	*cmdline_p = boot_command_line;
-	arm64_memblock_init();
-	paging_init();
-}
-```
-## arm64_memblock_init
-
-```c
-static phys_addr_t memory_limit = (phys_addr_t)ULLONG_MAX;
-/*
- * Limit the memory size that was specified via FDT.
- */
-static int __init early_mem(char *p)
-{
-	if (!p)
-		return 1;
-	memory_limit = memparse(p, &p) & PAGE_MASK;
-	pr_notice("Memory limited to %lldMB\n", memory_limit >> 20);
-	return 0;
-}
-early_param("mem", early_mem);
-```
-```c
-void __init arm64_memblock_init(void)
-{
-	memblock_enforce_memory_limit(memory_limit);
-	/*
-	 * Register the kernel text, kernel data, initrd, and initial
-	 * pagetables with memblock.
-	 */
-	memblock_reserve(__pa(_text), _end - _text);
-#ifdef CONFIG_BLK_DEV_INITRD
-	if (initrd_start)
-		memblock_reserve(__virt_to_phys(initrd_start), initrd_end - initrd_start);
-#endif
-
-	early_init_fdt_scan_reserved_mem();
-
-	/* 4GB maximum for 32-bit only capable devices */
-	if (IS_ENABLED(CONFIG_ZONE_DMA))
-		arm64_dma_phys_limit = max_zone_dma_phys();
-	else
-		arm64_dma_phys_limit = PHYS_MASK + 1;
-	dma_contiguous_reserve(arm64_dma_phys_limit);
-
-	memblock_allow_resize();
-	memblock_dump_all();
-}
-
-```
-
-
-
-## 将内存添加到memblock中
-
-`setup_machine_fdt->early_init_dt_scan->early_init_dt_scan_nodes`
-
-###  early_init_dt_scan_nodes
-
-```c
-void __init early_init_dt_scan_nodes(void)
-{
-	/* Setup memory, calling early_init_dt_add_memory_arch */
-	of_scan_flat_dt(early_init_dt_scan_memory, NULL);
-}
-```
-
-####  early_init_dt_scan_memory
-
-```c
-int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
-				     int depth, void *data)
-{
-	/* 获取device_type属性，dts中的memory node 会有该属性 */
-	const char *type = of_get_flat_dt_prop(node, "device_type", NULL);
-	const __be32 *reg, *endp;
-	int l;
-	reg = of_get_flat_dt_prop(node, "linux,usable-memory", &l);
-	if (reg == NULL)
-		reg = of_get_flat_dt_prop(node, "reg", &l);
-	if (reg == NULL)
-		return 0;
-	endp = reg + (l / sizeof(__be32));
-
-	pr_debug("memory scan node %s, reg size %d, data: %x %x %x %x,\n",
-	    uname, l, reg[0], reg[1], reg[2], reg[3]);
-	while ((endp - reg) >= (dt_root_addr_cells + dt_root_size_cells)) {
-		u64 base, size;
-		base = dt_mem_next_cell(dt_root_addr_cells, &reg);
-		size = dt_mem_next_cell(dt_root_size_cells, &reg);
-		if (size == 0)
-			continue;
-		pr_debug(" - %llx ,  %llx\n", (unsigned long long)base, (unsigned long long)size);
-		/* 得到memory的base和size */
-		early_init_dt_add_memory_arch(base, size);
-	}
-	return 0;
-}
-```
-
-```
-memory {
-  reg = <0x0 0x40000000 0x0 0x40000000>;
-  device_type = "memory";
-};  
-```
-
-#### early_init_dt_add_memory_arch
-
-```c
-void __init __weak early_init_dt_add_memory_arch(u64 base, u64 size)
-{
-	const u64 phys_offset = __pa(PAGE_OFFSET);
-	memblock_add(base, size);
-}
-```
+**linux kernel 版本4.0.0**
 
 ## memblock分析
 
@@ -193,6 +65,7 @@ memblock中定了了两种type **memory**和**reserved**，后续的操作都是
 ```c
 int memblock_add(phys_addr_t base, phys_addr_t size);
 int memblock_remove(phys_addr_t base, phys_addr_t size);
+phys_addr_t __init memblock_alloc(phys_addr_t size, phys_addr_t align);
 int memblock_free(phys_addr_t base, phys_addr_t size);
 int memblock_reserve(phys_addr_t base, phys_addr_t size);
 ```
@@ -348,7 +221,7 @@ static void __init_memblock memblock_insert_region(struct memblock_type *type,
 	struct memblock_region *rgn = &type->regions[idx];
 
 	BUG_ON(type->cnt >= type->max);
-    /* 从rgn起始，将type->cnt - idx个region向后移动，相当于将要添加的热工添加到原来region的前面
+    /* 从rgn起始，将type->cnt - idx个region向后移动，相当于将要添加的region添加到原来region的前面
      * 如果要添加的region base是最大的，则idx等于type->cnt，就不需要要移动了，直接添加到type->cnt为	  *	下标的regions中
      */
 	memmove(rgn + 1, rgn, (type->cnt - idx) * sizeof(*rgn));
@@ -361,6 +234,41 @@ static void __init_memblock memblock_insert_region(struct memblock_type *type,
 	type->total_size += size;
 }
 
+```
+
+##### memblock_merge_regions
+
+```c
+/**
+ * memblock_merge_regions - merge neighboring compatible regions
+ * @type: memblock type to scan
+ *
+ * Scan @type and merge neighboring compatible regions.
+ */
+static void __init_memblock memblock_merge_regions(struct memblock_type *type)
+{
+	int i = 0;
+
+	/* cnt never goes below 1 */
+	while (i < type->cnt - 1) {
+		struct memblock_region *this = &type->regions[i];
+		struct memblock_region *next = &type->regions[i + 1];
+
+		if (this->base + this->size != next->base ||
+		    memblock_get_region_node(this) !=
+		    memblock_get_region_node(next) ||
+		    this->flags != next->flags) {
+			BUG_ON(this->base + this->size > next->base);
+			i++;
+			continue;
+		}
+		/* 如果相邻的region地址连续，把相邻的进行合并 */
+		this->size += next->size;
+		/* move forward from next + 1, index of which is i + 2 */
+		memmove(next, next + 1, (type->cnt - (i + 2)) * sizeof(*next));
+		type->cnt--;
+	}
+}
 ```
 
 ### memblock_reserve
@@ -391,7 +299,317 @@ static int __init_memblock memblock_reserve_region(phys_addr_t base,
 }
 ```
 
+### memblock_remove
 
+```c
+int __init_memblock memblock_remove(phys_addr_t base, phys_addr_t size)
+{
+	return memblock_remove_range(&memblock.memory, base, size);
+}
+```
+
+#### memblock_remove_range
+
+```c
+int __init_memblock memblock_remove_range(struct memblock_type *type,
+					  phys_addr_t base, phys_addr_t size)
+{
+	int start_rgn, end_rgn;
+	int i, ret;
+	/* 处理有重合的情况 */
+	ret = memblock_isolate_range(type, base, size, &start_rgn, &end_rgn);
+	if (ret)
+		return ret;
+
+	for (i = end_rgn - 1; i >= start_rgn; i--)
+		memblock_remove_region(type, i);
+	return 0;
+}
+```
+
+##### memblock_remove_region
+
+```c
+static void __init_memblock memblock_remove_region(struct memblock_type *type, unsigned long r)
+{
+	type->total_size -= type->regions[r].size;
+	memmove(&type->regions[r], &type->regions[r + 1],
+		(type->cnt - (r + 1)) * sizeof(type->regions[r]));
+	type->cnt--;
+
+	/* Special case for empty arrays */
+	if (type->cnt == 0) {
+		WARN_ON(type->total_size != 0);
+		type->cnt = 1;
+		type->regions[0].base = 0;
+		type->regions[0].size = 0;
+		type->regions[0].flags = 0;
+		memblock_set_region_node(&type->regions[0], MAX_NUMNODES);
+	}
+}
+```
+
+### memblock_alloc
+
+
+```c
+#define MEMBLOCK_ALLOC_ACCESSIBLE	0
+phys_addr_t __init memblock_alloc(phys_addr_t size, phys_addr_t align)
+{
+	return memblock_alloc_base(size, align, MEMBLOCK_ALLOC_ACCESSIBLE);
+}
+```
+
+#### memblock_alloc_base
+
+```c
+phys_addr_t __init memblock_alloc_base(phys_addr_t size, phys_addr_t align, 
+                                       phys_addr_t max_addr) /* max_addr为0 */
+{
+	phys_addr_t alloc;
+	alloc = __memblock_alloc_base(size, align, max_addr);
+	if (alloc == 0)
+		panic("ERROR: Failed to allocate 0x%llx bytes below 0x%llx.\n",
+		      (unsigned long long) size, (unsigned long long) max_addr);
+	return alloc;
+}
+```
+
+##### __memblock_alloc_base
+
+```c
+phys_addr_t __init __memblock_alloc_base(phys_addr_t size, phys_addr_t align, 
+                                         phys_addr_t max_addr)/* max_addr为0 */
+{
+	return memblock_alloc_base_nid(size, align, max_addr, NUMA_NO_NODE);
+}
+```
+
+###### memblock_alloc_base_nid
+
+```c
+static phys_addr_t __init memblock_alloc_base_nid(phys_addr_t size,
+					phys_addr_t align, phys_addr_t max_addr,/* max_addr为0 */
+					int nid)
+{
+	return memblock_alloc_range_nid(size, align, 0, max_addr, nid);
+}
+```
+
+###### memblock_alloc_range_nid
+
+```c
+static phys_addr_t __init memblock_alloc_range_nid(phys_addr_t size,
+					phys_addr_t align, phys_addr_t start,/* start和end都为0 */
+					phys_addr_t end, int nid)
+{
+	phys_addr_t found;
+
+	if (!align)
+		align = SMP_CACHE_BYTES;
+
+	found = memblock_find_in_range_node(size, align, start, end, nid);
+    /* 将分配到的region添加到memblock.reserved中，表示已经被使用 */
+	if (found && !memblock_reserve(found, size)) {
+		/*
+		 * The min_count is set to 0 so that memblock allocations are
+		 * never reported as leaks.
+		 */
+		kmemleak_alloc(__va(found), size, 0, 0);
+		return found;
+	}
+	return 0;
+}
+```
+
+###### memblock_find_in_range_node
+
+```c
+/**
+ * memblock_find_in_range_node - find free area in given range and node
+ * @size: size of free area to find
+ * @align: alignment of free area to find
+ * @start: start of candidate range
+ * @end: end of candidate range, can be %MEMBLOCK_ALLOC_{ANYWHERE|ACCESSIBLE}
+ * @nid: nid of the free area to find, %NUMA_NO_NODE for any node
+ *
+ * Find @size free area aligned to @align in the specified range and node.
+ *
+ * When allocation direction is bottom-up, the @start should be greater
+ * than the end of the kernel image. Otherwise, it will be trimmed. The
+ * reason is that we want the bottom-up allocation just near the kernel
+ * image so it is highly likely that the allocated memory and the kernel
+ * will reside in the same node.
+ *
+ * If bottom-up allocation failed, will try to allocate memory top-down.
+ *
+ * RETURNS:
+ * Found address on success, 0 on failure.
+ */
+
+#define MEMBLOCK_ALLOC_ANYWHERE	(~(phys_addr_t)0)
+phys_addr_t __init_memblock memblock_find_in_range_node(phys_addr_t size,
+					phys_addr_t align, phys_addr_t start,
+					phys_addr_t end, int nid)
+{
+	phys_addr_t kernel_end, ret;
+
+	/* pump up @end */
+    /* 将end设置为memblock.current_limit既MEMBLOCK_ALLOC_ANYWHERE */
+	if (end == MEMBLOCK_ALLOC_ACCESSIBLE) 
+		end = memblock.current_limit;
+
+	/* avoid allocating the first page */
+    /* 避免分配第一个页，start =  PAGE_SIZE，PAGE_SIZE表示一页的大小*/
+	start = max_t(phys_addr_t, start, PAGE_SIZE);
+	end = max(start, end);
+	kernel_end = __pa_symbol(_end);/*kenrel镜像末尾的物理地址*/
+
+	/*
+	 * try bottom-up allocation only when bottom-up mode
+	 * is set and @end is above the kernel image.
+	 */
+	if (memblock_bottom_up() && end > kernel_end) { /* 默认是从上到下，略过这部分 */
+	}
+	return __memblock_find_range_top_down(start, end, size, align, nid);
+}
+```
+
+###### __memblock_find_range_top_down
+
+```c
+/**
+ * __memblock_find_range_top_down - find free area utility, in top-down
+ * @start: start of candidate range
+ * @end: end of candidate range, can be %MEMBLOCK_ALLOC_{ANYWHERE|ACCESSIBLE}
+ * @size: size of free area to find
+ * @align: alignment of free area to find
+ * @nid: nid of the free area to find, %NUMA_NO_NODE for any node
+ *
+ * Utility called from memblock_find_in_range_node(), find free area top-down.
+ *
+ * RETURNS:
+ * Found address on success, 0 on failure.
+ */
+static phys_addr_t __init_memblock
+__memblock_find_range_top_down(phys_addr_t start, phys_addr_t end,
+			       phys_addr_t size, phys_addr_t align, int nid)
+{
+	phys_addr_t this_start, this_end, cand;
+	u64 i;
+	/* 
+	 * 找到一个region，该region在memblock.memory范围内，但是不再memblock.reserved中
+	 * 即，该memblock，没有被使用，memblock.reserved中的内存表示已经使用的
+	 */
+	for_each_free_mem_range_reverse(i, nid, &this_start, &this_end, NULL) {
+        /* 使this_start和this_end在start和end之间 */
+		this_start = clamp(this_start, start, end);
+		this_end = clamp(this_end, start, end);
+
+		if (this_end < size)
+			continue;
+		/* 处理对齐 */
+		cand = round_down(this_end - size, align);
+		if (cand >= this_start)
+			return cand;/* 返回base地址 */
+	}
+
+	return 0;
+}
+```
+
+### memblock_free
+
+```c
+int __init_memblock memblock_free(phys_addr_t base, phys_addr_t size)
+{
+	memblock_dbg("   memblock_free: [%#016llx-%#016llx] %pF\n",
+		     (unsigned long long)base,
+		     (unsigned long long)base + size - 1,
+		     (void *)_RET_IP_);
+	/* 应该是和内存泄漏相关 */
+	kmemleak_free_part(__va(base), size);
+	return memblock_remove_range(&memblock.reserved, base, size);
+}
+```
+
+## 接口使用如下：
+
+1. memblock_add：将region添加到memblock.memory中，
+2. memblock_remove：从memblock.memory删除region
+3. memblock_alloc：分配内存，并调用memblock_reserve表示该region已经被分配。将region添加到memblock.reserve中。
+4. memblock_free：从memblock.reserve中移除。
+5. memblock_reserve：知道region的base和size可以直接调用memblock_reserve。
+
+# memblock的使用
+
+```c
+void __init setup_arch(char **cmdline_p)
+{
+	setup_processor();
+	setup_machine_fdt(__fdt_pointer);
+	init_mm.start_code = (unsigned long) _text;
+	init_mm.end_code   = (unsigned long) _etext;
+	init_mm.end_data   = (unsigned long) _edata;
+	init_mm.brk	   = (unsigned long) _end;
+
+	*cmdline_p = boot_command_line;
+	arm64_memblock_init();
+	paging_init();
+}
+```
+
+`setup_machine_fdt->early_init_dt_scan->early_init_dt_scan_nodes`
+
+在每个fdt的每个节点中执行`early_init_dt_scan_memory`函数
+
+## early_init_dt_scan_memory
+
+```c
+int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
+				     int depth, void *data)
+{
+	/* 获取device_type属性，dts中的memory node 会有该属性 */
+	const char *type = of_get_flat_dt_prop(node, "device_type", NULL);
+	const __be32 *reg, *endp;
+	int l;
+	reg = of_get_flat_dt_prop(node, "linux,usable-memory", &l);
+	if (reg == NULL)
+		reg = of_get_flat_dt_prop(node, "reg", &l);
+	if (reg == NULL)
+		return 0;
+	endp = reg + (l / sizeof(__be32));
+
+	pr_debug("memory scan node %s, reg size %d, data: %x %x %x %x,\n",
+	    uname, l, reg[0], reg[1], reg[2], reg[3]);
+  
+	while ((endp - reg) >= (dt_root_addr_cells + dt_root_size_cells)) {
+		u64 base, size;
+		base = dt_mem_next_cell(dt_root_addr_cells, &reg);
+		size = dt_mem_next_cell(dt_root_size_cells, &reg);
+		if (size == 0)
+			continue;
+		pr_debug(" - %llx ,  %llx\n", (unsigned long long)base, (unsigned long 						long)size);
+ 
+		/* 得到memory的base和size */
+		early_init_dt_add_memory_arch(base, size);
+	}
+	return 0;
+}
+```
+
+### memory node
+
+```c
+memory {
+  reg = <0x0 0x40000000 0x0 0x40000000>;
+  device_type = "memory";
+};
+```
+
+early_init_dt_add_memory_arch最终调用memblock_add(base, size);将内存添加到`memblock.memory`中。
+
+## arm64_memblock_init
 
 ```c
 void __init arm64_memblock_init(void)
@@ -404,7 +622,7 @@ void __init arm64_memblock_init(void)
 	 */
 	memblock_reserve(__pa(_text), _end - _text);
 #ifdef CONFIG_BLK_DEV_INITRD
-	if (initrd_start)
+	if (initrd_start) /* 将initrd的内存添加到reserve中 */
 		memblock_reserve(__virt_to_phys(initrd_start), initrd_end - initrd_start);
 #endif
 
@@ -440,17 +658,13 @@ void __init memblock_enforce_memory_limit(phys_addr_t limit)
 	 */
 	for_each_memblock(memory, r) {
 		if (limit <= r->size) {
-			/* r->base + limit会大于limit，这样limit就没意义了？
-			 * base size    limit(100)
-			 * 10   30              100 - 30 = 70
-			 * 40   60              80 - 60 = 10
-			 * 95   30              100 + 10 = 110
-			 * 没看明白为什么这么搞
+			/* limit <= r->size那么r->base + limit就会小于r->base + size
+			 * 这样就限制了end的地址范围，max_addr到ULLONG_MAX就没有用
 			 */
 			max_addr = r->base + limit;
 			break;
 		}
-		/* 
+		/* memory中的region base是从小到大排列的。
 		 * limit = limit - r->size，
 		 * 如果limit 一直大于 r->size，则表示所有region都在limit之内
 		 * 那么max_address不变
@@ -458,34 +672,13 @@ void __init memblock_enforce_memory_limit(phys_addr_t limit)
 		limit -= r->size;
 	}
 
-	/* truncate（缩短） both memory and reserved regions，将max_addr到ULLONG_MAX的区域移除 */
+	/* truncate（缩短） both memory and reserved regions，将max_addr到ULLONG_MAX的区域
+	 * 从memory和reserve中移除 
+	 */
 	memblock_remove_range(&memblock.memory, max_addr, (phys_addr_t)ULLONG_MAX);
 	memblock_remove_range(&memblock.reserved, max_addr, (phys_addr_t)ULLONG_MAX);
 }
 ```
-
-### memblock_reserve
-
-```c
-int __init_memblock memblock_reserve(phys_addr_t base, phys_addr_t size)
-{
-	return memblock_reserve_region(base, size, MAX_NUMNODES, 0);
-}
-```
-
-#### memblock_reserve_region
-
-```c
-static int __init_memblock memblock_reserve_region(phys_addr_t base, phys_addr_t size, 
-                             int nid,
-						   unsigned long flags)
-{
-	struct memblock_type *_rgn = &memblock.reserved;
-	/* 添加到reserved    memblock_type中, 表示该region被使用*/
-	return memblock_add_range(_rgn, base, size, nid, flags);
-}
-```
-
 ###  early_init_fdt_scan_reserved_mem
 
 ```c
@@ -508,7 +701,9 @@ void __init early_init_fdt_scan_reserved_mem(void)
 	 * https://blog.csdn.net/kickxxx/article/details/54631535
 	 */
 	for (n = 0; ; n++) {
-		/* 从off_mem_rsvmap中获得base和size */
+		/* 得到dtb中memory reserve block的base和size。由dts中的
+		 * /memreserve/ <address> <length>生成
+		 */
 		fdt_get_mem_rsv(initial_boot_params, n, &base, &size);
 		if (!size)
 			break;
@@ -612,13 +807,11 @@ static int __init __reserved_mem_reserve_reg(unsigned long node, const char *una
 		base = dt_mem_next_cell(dt_root_addr_cells, &prop);
 		size = dt_mem_next_cell(dt_root_size_cells, &prop);
 
-		if (size &&
+		if (size && /* 将获取到的memory添加到memblocl.memory中*/
 		    early_init_dt_reserve_memory_arch(base, size, nomap) == 0)
-			pr_debug("Reserved memory: reserved region for node '%s': base %pa, size %ld MiB\n",
-				uname, &base, (unsigned long)size / SZ_1M);
+			pr_debug("Reserved memory: reserved region for node '%s': base %pa, size %ld 					MiB\n", uname, &base, (unsigned long)size / SZ_1M);
 		else
-			pr_info("Reserved memory: failed to reserve memory for node '%s': base %pa, size %ld MiB\n",
-				uname, &base, (unsigned long)size / SZ_1M);
+			pr_info("Reserved memory: failed to reserve memory for node '%s': base %pa, 				size %ld MiB\n",uname, &base, (unsigned long)size / SZ_1M);
 
 		len -= t_len;
 		if (first) {
@@ -630,278 +823,4 @@ static int __init __reserved_mem_reserve_reg(unsigned long node, const char *una
 }
 ```
 
-#### fdt_reserved_mem_save_node
-
-```c
-/**
- * res_mem_save_node() - save fdt node for second pass initialization
- */
-void __init fdt_reserved_mem_save_node(unsigned long node, const char *uname,
-				      phys_addr_t base, phys_addr_t size)
-{
-	/* 将信息保存到reserved_mem中 */
-	struct reserved_mem *rmem = &reserved_mem[reserved_mem_count];
-
-	if (reserved_mem_count == ARRAY_SIZE(reserved_mem)) {
-		pr_err("Reserved memory: not enough space all defined regions.\n");
-		return;
-	}
-
-	rmem->fdt_node = node;
-	rmem->name = uname;
-	rmem->base = base;
-	rmem->size = size;
-
-	reserved_mem_count++;
-	return;
-}
-```
-
-### fdt_init_reserved_mem
-
-```c
-/**
- * fdt_init_reserved_mem - allocate and init all saved reserved memory regions
- */
-void __init fdt_init_reserved_mem(void)
-{
-	int i;
-	for (i = 0; i < reserved_mem_count; i++) {
-		struct reserved_mem *rmem = &reserved_mem[i];
-		unsigned long node = rmem->fdt_node;
-		int len;
-		const __be32 *prop;
-		int err = 0;
-
-		prop = of_get_flat_dt_prop(node, "phandle", &len);
-		if (!prop)
-			prop = of_get_flat_dt_prop(node, "linux,phandle", &len);
-		if (prop)
-			rmem->phandle = of_read_number(prop, len/4);
-		/* 
-		 * 没有reg属性的reserved-memory node，其 rmem->size为0 
-		 * 以为只有size，没有知道base，所以需要分配size大小的内存
-		 */
-		if (rmem->size == 0)
-			err = __reserved_mem_alloc_size(node, rmem->name,
-						 &rmem->base, &rmem->size);
-		if (err == 0)
-			__reserved_mem_init_node(rmem);
-	}
-}
-```
-
-#### __reserved_mem_alloc_size
-
-```c
-/**
- * res_mem_alloc_size() - allocate reserved memory described by 'size', 'align'
- *			  and 'alloc-ranges' properties
- */
-static int __init __reserved_mem_alloc_size(unsigned long node,
-	const char *uname, phys_addr_t *res_base, phys_addr_t *res_size)
-{
-	int t_len = (dt_root_addr_cells + dt_root_size_cells) * sizeof(__be32);
-	phys_addr_t start = 0, end = 0;
-	phys_addr_t base = 0, align = 0, size;
-	int len;
-	const __be32 *prop;
-	int nomap;
-	int ret;
-
-	prop = of_get_flat_dt_prop(node, "size", &len);
-
-
-	size = dt_mem_next_cell(dt_root_size_cells, &prop);
-
-	nomap = of_get_flat_dt_prop(node, "no-map", NULL) != NULL;
-
-	prop = of_get_flat_dt_prop(node, "alignment", &len);
-	if (prop) {
-		align = dt_mem_next_cell(dt_root_addr_cells, &prop);
-	}
-
-	prop = of_get_flat_dt_prop(node, "alloc-ranges", &len);
-	if (prop) {
-		base = 0;
-
-		while (len > 0) {
-			start = dt_mem_next_cell(dt_root_addr_cells, &prop);
-			end = start + dt_mem_next_cell(dt_root_size_cells,
-						       &prop);
-
-			ret = early_init_dt_alloc_reserved_memory_arch(size,
-					align, start, end, nomap, &base);
-				break;
-			}
-			len -= t_len;
-		}
-
-	} else {
-		ret = early_init_dt_alloc_reserved_memory_arch(size, align,
-							0, 0, nomap, &base);
-	}
-	*res_base = base;
-	*res_size = size;
-	return 0;
-}
-
-```
-
-#### early_init_dt_alloc_reserved_memory_arch
-
-```c
-int __init __weak early_init_dt_alloc_reserved_memory_arch(phys_addr_t size,
-	phys_addr_t align, phys_addr_t start, phys_addr_t end, bool nomap,
-	phys_addr_t *res_base)
-{
-	/*
-	 * We use __memblock_alloc_base() because memblock_alloc_base()
-	 * panic()s on allocation failure.
-	 */
-	phys_addr_t base = __memblock_alloc_base(size, align, end);
-
-	*res_base = base;
-	/* 
-	 * memblock.memory中的内存，所以会进行映射
-	 * 如果no map，则从memblock.memory中移除
-	 */
-	if (nomap)
-		return memblock_remove(base, size);
-	return 0;
-}
-```
-
-####  __memblock_alloc_base
-
-```
-phys_addr_t __init __memblock_alloc_base(phys_addr_t size, phys_addr_t align, phys_addr_t max_addr)
-{
-	return memblock_alloc_base_nid(size, align, max_addr, NUMA_NO_NODE);
-}
-```
-
-#### memblock_alloc_range_nid
-
-```c
-static phys_addr_t __init memblock_alloc_range_nid(phys_addr_t size,
-					phys_addr_t align, phys_addr_t start,
-					phys_addr_t end, int nid)
-{
-	phys_addr_t found;
-
-	if (!align)
-		align = SMP_CACHE_BYTES;
-
-	found = memblock_find_in_range_node(size, align, start, end, nid);
-	/* 找到起始地址，并且增加到memblock.reserved region中 */
-	if (found && !memblock_reserve(found, size)) {
-		/*
-		 * The min_count is set to 0 so that memblock allocations are
-		 * never reported as leaks.
-		 */
-		kmemleak_alloc(__va(found), size, 0, 0);
-		return found;
-	}
-	return 0;
-}
-```
-
-#### memblock_find_in_range_node
-
-```c
-phys_addr_t __init_memblock memblock_find_in_range_node(phys_addr_t size,
-					phys_addr_t align, phys_addr_t start,
-					phys_addr_t end, int nid)
-{
-	phys_addr_t kernel_end, ret;
-
-	/* pump up @end */
-	if (end == MEMBLOCK_ALLOC_ACCESSIBLE)
-		end = memblock.current_limit;
-
-	/* avoid allocating the first page */
-	start = max_t(phys_addr_t, start, PAGE_SIZE);
-	end = max(start, end);
-	kernel_end = __pa_symbol(_end);
-
-	/*
-	 * try bottom-up allocation only when bottom-up mode
-	 * is set and @end is above the kernel image.
-	 */
-	if (memblock_bottom_up() && end > kernel_end) {
-	
-	}
-
-	return __memblock_find_range_top_down(start, end, size, align, nid);
-}
-```
-
-#### __memblock_find_range_top_down
-
-```c
-static phys_addr_t __init_memblock
-__memblock_find_range_top_down(phys_addr_t start, phys_addr_t end,
-			       phys_addr_t size, phys_addr_t align, int nid)
-{
-	phys_addr_t this_start, this_end, cand;
-	u64 i;
-
-	/* 
-	 * 找到一个memblock，该memblock在memblock.memory范围内，但是不再memblock.reserved中
-	 * 即，该memblock，没有被使用，memblock.reserved中的内存表示已经使用的
-	 */
-	for_each_free_mem_range_reverse(i, nid, &this_start, &this_end, NULL) {
-		this_start = clamp(this_start, start, end);
-		this_end = clamp(this_end, start, end);
-
-		if (this_end < size)
-			continue;
-
-		cand = round_down(this_end - size, align);
-		if (cand >= this_start)
-			/* 返回起始地址 */
-			return cand;
-	}
-
-	return 0;
-}
-```
-
-### __reserved_mem_init_node
-
-```c
-static int __init __reserved_mem_init_node(struct reserved_mem *rmem)
-{
-	extern const struct of_device_id __reservedmem_of_table[];
-	const struct of_device_id *i;
-
-	/* 
-	 * 调用使用RESERVEDMEM_OF_DECLARE声明的结构体中的init函数，例如cma
-	 * RESERVEDMEM_OF_DECLARE(cma, "shared-dma-pool", rmem_cma_setup);
-	 */
-	for (i = __reservedmem_of_table; i < &__rmem_of_table_sentinel; i++) {
-		reservedmem_of_init_fn initfn = i->data;
-		const char *compat = i->compatible;
-
-		if (!of_flat_dt_is_compatible(rmem->fdt_node, compat))
-			continue;
-
-		if (initfn(rmem) == 0) {
-			pr_info("Reserved memory: initialized node %s, compatible id %s\n",
-				rmem->name, compat);
-			return 0;
-		}
-	}
-	return -ENOENT;
-}
-```
-
-## memblock总结
-
-memblock中有两个type：memory和reserved
-
-memory：表示系统中可以使用的内存，而且这里面的内存最后会被进行虚拟地址和物理地址映射。
-
-reserved：表示已经使用的内存。reserved内存都是在memory的范围内
 
