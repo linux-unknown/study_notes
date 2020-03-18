@@ -6,8 +6,8 @@ memblock是linux kernel在伙伴系统还没有完成初始的时候用来进行
 
 从linux的代码执行流程看，memblock是和架构相关的，我们只关注arm64。
 
-## setup_arch
-
+## memblock初始化
+### arm64_memblock_init
 ```c
 void __init setup_arch(char **cmdline_p)
 {
@@ -24,6 +24,55 @@ void __init setup_arch(char **cmdline_p)
 	paging_init();
 }
 ```
+## arm64_memblock_init
+
+```c
+static phys_addr_t memory_limit = (phys_addr_t)ULLONG_MAX;
+/*
+ * Limit the memory size that was specified via FDT.
+ */
+static int __init early_mem(char *p)
+{
+	if (!p)
+		return 1;
+	memory_limit = memparse(p, &p) & PAGE_MASK;
+	pr_notice("Memory limited to %lldMB\n", memory_limit >> 20);
+	return 0;
+}
+early_param("mem", early_mem);
+```
+```c
+void __init arm64_memblock_init(void)
+{
+	memblock_enforce_memory_limit(memory_limit);
+	/*
+	 * Register the kernel text, kernel data, initrd, and initial
+	 * pagetables with memblock.
+	 */
+	memblock_reserve(__pa(_text), _end - _text);
+#ifdef CONFIG_BLK_DEV_INITRD
+	if (initrd_start)
+		memblock_reserve(__virt_to_phys(initrd_start), initrd_end - initrd_start);
+#endif
+
+	early_init_fdt_scan_reserved_mem();
+
+	/* 4GB maximum for 32-bit only capable devices */
+	if (IS_ENABLED(CONFIG_ZONE_DMA))
+		arm64_dma_phys_limit = max_zone_dma_phys();
+	else
+		arm64_dma_phys_limit = PHYS_MASK + 1;
+	dma_contiguous_reserve(arm64_dma_phys_limit);
+
+	memblock_allow_resize();
+	memblock_dump_all();
+}
+
+```
+
+
+
+## 将内存添加到memblock中
 
 `setup_machine_fdt->early_init_dt_scan->early_init_dt_scan_nodes`
 
@@ -87,128 +136,7 @@ void __init __weak early_init_dt_add_memory_arch(u64 base, u64 size)
 }
 ```
 
-#### memblock_add
-
-```c
-int __init_memblock memblock_add(phys_addr_t base, phys_addr_t size)
-{
-	/* 将该region添加到memblock.memory */
-	return memblock_add_range(&memblock.memory, base, size, MAX_NUMNODES, 0);
-}
-```
-
-#### memblock_add_range
-
-```c
-int __init_memblock memblock_add_range(struct memblock_type *type, phys_addr_t base, phys_addr_t size,
-				int nid, unsigned long flags)
-{
-	bool insert = false;
-	phys_addr_t obase = base;
-	phys_addr_t end = base + memblock_cap_size(base, &size);
-	int i, nr_new;
-
-	if (!size)
-		return 0;
-
-	/* special case for empty array */
-	if (type->regions[0].size == 0) {
-		type->regions[0].base = base;
-		type->regions[0].size = size;
-		type->regions[0].flags = flags;
-		memblock_set_region_node(&type->regions[0], nid);
-		type->total_size = size;
-		return 0;
-	}
-repeat:
-	/*
-	 * The following is executed twice.  Once with %false @insert and
-	 * then with %true.  The first counts the number of regions needed
-	 * to accomodate the new area.  The second actually inserts them.
-	 * 下面的代码会执行两次，第一次insert是false，第二次是true，第一次计算需要
-	 * 容纳的region的数量，第二次会执行真正得insert操作
-	 */
-	base = obase;
-	nr_new = 0;
-	/* 如果insert的region是最打的则，则该for循环会扫描到所有region，然后退出 */
-	for (i = 0; i < type->cnt; i++) {
-		struct memblock_region *rgn = &type->regions[i];
-		phys_addr_t rbase = rgn->base;
-		phys_addr_t rend = rbase + rgn->size;
-		/* 不满足，表示左边有重合，region的是一个插入排序过程，按照region的数组大小从小到大排列 */
-		if (rbase >= end)
-			break;
-		/* 不满足，表示右边有重合 
-		 * 如果最新的region是最大，则会继续查找，这时i会=	 type->cnt而推出
-		 */
-		if (rend <= base)
-			continue;
-		/*
-		 * @rgn overlaps.  If it separates the lower part of new
-		 * area, insert that portion.
-		 */
-		if (rbase > base) {
-			nr_new++;
-			if (insert)
-				memblock_insert_region(type, i++, base, rbase - base, nid, flags);
-		}
-		/* area below @rend is dealt with, forget about it */
-		base = min(rend, end);
-	}
-
-	/* insert the remaining portion */
-	if (base < end) {
-		nr_new++;
-		if (insert)
-			memblock_insert_region(type, i, base, end - base, nid, flags);
-	}
-
-	/*
-	 * If this was the first round, resize array and repeat for actual
-	 * insertions; otherwise, merge and return.
-	 */
-	if (!insert) {
-		while (type->cnt + nr_new > type->max)
-			if (memblock_double_array(type, obase, size) < 0)
-				return -ENOMEM;
-		insert = true;
-		goto repeat;
-	} else {
-		memblock_merge_regions(type);
-		return 0;
-	}
-}
-
-```
-
-#### memblock_insert_region
-
-```c
-static void __init_memblock memblock_insert_region(struct memblock_type *type, int idx,
-                             phys_addr_t base,
-						   phys_addr_t size,
-						   int nid, unsigned long flags)
-{
-	struct memblock_region *rgn = &type->regions[idx];
-
-	BUG_ON(type->cnt >= type->max);
-	/* 
-	 * 将idx对应region之后的所有regions搬移到rgn + 1处， 
-	 * 其实就是一种插入排序，region的大小安装region数组的index从左到右依次增大
-	 */
-	memmove(rgn + 1, rgn, (type->cnt - idx) * sizeof(*rgn));
-	rgn->base = base;
-	rgn->size = size;
-	rgn->flags = flags;
-	memblock_set_region_node(rgn, nid);
-	type->cnt++;/* type->cnt自增 */
-	type->total_size += size;
-}
-```
-
-
-
-### arm64_memblock_init
+## memblock分析
 
 ### memblock数据结构
 
@@ -235,27 +163,236 @@ struct memblock_type {
 };
 
 struct memblock {
-	bool bottom_up;  /* is bottom up direction? */
+	bool bottom_up;  /* is bottom up direction? 从下往上的方向*/
 	phys_addr_t current_limit;
 	/* memory表示总共物理内存 */
 	struct memblock_type memory;
 	/* reserved的表示被占用的 */
 	struct memblock_type reserved;
 };
-
+```
+```c
 struct memblock memblock __initdata_memblock = {
+    /*memblock_memory_init_regions 有128个regions*/
 	.memory.regions		= memblock_memory_init_regions,
 	.memory.cnt		= 1,	/* empty dummy entry */
 	.memory.max		= INIT_MEMBLOCK_REGIONS,
-
+	/* memblock_reserved_init_regions 有128个regions */
 	.reserved.regions	= memblock_reserved_init_regions,
 	.reserved.cnt		= 1,	/* empty dummy entry */
 	.reserved.max		= INIT_MEMBLOCK_REGIONS,
 
-	.bottom_up		= false,
+	.bottom_up		= false,/* 表示从上向下增长 */
 	.current_limit		= MEMBLOCK_ALLOC_ANYWHERE,
 };
 ```
+memblock中定了了两种type **memory**和**reserved**，后续的操作都是在这两种type中进行的。
+
+### memblock API
+
+```c
+int memblock_add(phys_addr_t base, phys_addr_t size);
+int memblock_remove(phys_addr_t base, phys_addr_t size);
+int memblock_free(phys_addr_t base, phys_addr_t size);
+int memblock_reserve(phys_addr_t base, phys_addr_t size);
+```
+
+### memblock_add
+
+将memory添加到`memblock.memory`类型中。
+
+```c
+#define MAX_NUMNODES    (1 << NODES_SHIFT)
+int __init_memblock memblock_add(phys_addr_t base, phys_addr_t size)
+{
+	return memblock_add_range(&memblock.memory, base, size, MAX_NUMNODES, 0);
+}
+```
+#### memblock_add_range
+```c
+/**
+ * memblock_add_range - add new memblock region
+ * @type: memblock type to add new region into
+ * @base: base address of the new region
+ * @size: size of the new region
+ * @nid: nid of the new region
+ * @flags: flags of the new region
+ *
+ * Add new memblock region [@base,@base+@size) into @type.  The new region
+ * is allowed to overlap with existing ones - overlaps don't affect already
+ * existing regions.  @type is guaranteed to be minimal (all neighbouring
+ * compatible regions are merged) after the addition.
+ *
+ * RETURNS:
+ * 0 on success, -errno on failure.
+ */
+int __init_memblock memblock_add_range(struct memblock_type *type, phys_addr_t base, 					phys_addr_t size, int nid, unsigned long flags)
+{
+	bool insert = false;
+	phys_addr_t obase = base;
+
+    /**
+     * /*adjust *@size so that (@base + *@size) doesn't overflow, return new size */
+	 * static inline phys_addr_t memblock_cap_size(phys_addr_t base, phys_addr_t *size)
+	 * {
+     *    	/* 确保size不会超过ULLONG_MAX大小 */
+	 * 		return *size = min(*size, (phys_addr_t)ULLONG_MAX - base);
+	 * }
+     */
+	phys_addr_t end = base + memblock_cap_size(base, &size);
+	int i, nr_new;
+
+	if (!size)
+		return 0;
+
+	/* special case for empty array
+     * 特殊情况，region array为空的时候，既首次add
+     */
+	if (type->regions[0].size == 0) {
+		WARN_ON(type->cnt != 1 || type->total_size);
+		type->regions[0].base = base;
+		type->regions[0].size = size;
+		type->regions[0].flags = flags;
+        /* r->nid = nid; */
+		memblock_set_region_node(&type->regions[0], nid);
+		type->total_size = size;
+		return 0;
+	}
+repeat:
+	/*
+	 * The following is executed twice.  Once with %false @insert and
+	 * then with %true.  The first counts the number of regions needed
+	 * to accomodate the new area.  The second actually inserts them.
+	 * 下面的代码会执行两次，第一次insert是false，第二次是true，第一次计算需要
+	 * 容纳的region的数量，第二次会执行真正得insert操作
+	 */
+	base = obase;
+	nr_new = 0;
+	/* memory和reserve memblock_type的cnt默认初始化为1 */
+	for (i = 0; i < type->cnt; i++) {
+		struct memblock_region *rgn = &type->regions[i];
+		phys_addr_t rbase = rgn->base;
+		phys_addr_t rend = rbase + rgn->size;
+		/* type中的region数组是按照base从小到大排列的*/
+   		/* 被添加的region比最小region小，退出，起始就是一个从小到到的插入排序 */
+		if (rbase >= end)
+			break;
+ 		/* 被添加的region比当前region大，继续查找，直到找到比要添加region大的或者到循环结束，
+ 		 * 这个时候regon是base最大的（前提是没有重叠）
+ 		 */
+		if (rend <= base)  
+			continue;
+		/*
+		 * @rgn overlaps.  If it separates the lower part of new
+		 * area, insert that portion.表示新增加的和已经添加的region有部分重叠
+		 */
+		if (rbase > base) {
+            /* 下面两种情况，***是另一种情况
+             *     |----------------|************
+             *     |     |----------|-----|     |
+             * ----+-----+----------+-----+-----+-------
+             *    base   rbase     end   rend   end
+             */
+			nr_new++;/* 表示region增加1个 */
+			if (insert) /* 将base到rebase部分添加到region中 */
+				memblock_insert_region(type, i++, base, rbase - base, nid, flags);
+		}
+		/* area below @rend is dealt with, forget about it */
+		base = min(rend, end);/*第一种重叠，base=end，第二种重叠，base=rend，继续循环*/
+	}
+
+	/* insert the remaining portion */
+    /* 对于上面从break跳出和循环条件不满足的，肯定满足，base < end，重叠的右边也满足 */
+	if (base < end) {
+		nr_new++;
+		if (insert)
+			memblock_insert_region(type, i, base, end - base, nid, flags);
+	}
+
+	/*
+	 * If this was the first round, resize array and repeat for actual
+	 * insertions; otherwise, merge and return.
+	 */
+	if (!insert) {
+		while (type->cnt + nr_new > type->max)
+            /* memblock_double_array还不知道是起什么作用 */
+			if (memblock_double_array(type, obase, size) < 0)
+				return -ENOMEM;
+		insert = true;
+		goto repeat;
+	} else {
+		memblock_merge_regions(type);
+		return 0;
+	}
+}
+```
+#####  memblock_insert_region
+```c
+/**
+ * memblock_insert_region - insert new memblock region
+ * @type:	memblock type to insert into
+ * @idx:	index for the insertion point
+ * @base:	base address of the new region
+ * @size:	size of the new region
+ * @nid:	node id of the new region
+ * @flags:	flags of the new region
+ *
+ * Insert new memblock region [@base,@base+@size) into @type at @idx.
+ * @type must already have extra room to accomodate the new region.
+ */
+static void __init_memblock memblock_insert_region(struct memblock_type *type,
+						   int idx, phys_addr_t base,
+						   phys_addr_t size,
+						   int nid, unsigned long flags)
+{
+	struct memblock_region *rgn = &type->regions[idx];
+
+	BUG_ON(type->cnt >= type->max);
+    /* 从rgn起始，将type->cnt - idx个region向后移动，相当于将要添加的热工添加到原来region的前面
+     * 如果要添加的region base是最大的，则idx等于type->cnt，就不需要要移动了，直接添加到type->cnt为	  *	下标的regions中
+     */
+	memmove(rgn + 1, rgn, (type->cnt - idx) * sizeof(*rgn));
+    /* 将要添加的region添加到idx对应的region中 */
+	rgn->base = base;
+	rgn->size = size;
+	rgn->flags = flags;
+	memblock_set_region_node(rgn, nid);
+	type->cnt++;
+	type->total_size += size;
+}
+
+```
+
+### memblock_reserve
+
+```c
+int __init_memblock memblock_reserve(phys_addr_t base, phys_addr_t size)
+{
+	return memblock_reserve_region(base, size, MAX_NUMNODES, 0);
+}
+```
+
+#### memblock_reserve_region
+
+```c
+static int __init_memblock memblock_reserve_region(phys_addr_t base,
+						   phys_addr_t size,
+						   int nid,
+						   unsigned long flags)
+{
+	struct memblock_type *_rgn = &memblock.reserved;
+
+	memblock_dbg("memblock_reserve: [%#016llx-%#016llx] flags %#02lx %pF\n",
+		     (unsigned long long)base,
+		     (unsigned long long)base + size - 1,
+		     flags, (void *)_RET_IP_);
+	/* 同样时候调用memblock_add_range，至是type变为了memblock.reserved */
+	return memblock_add_range(_rgn, base, size, nid, flags);
+}
+```
+
+
+
 ```c
 void __init arm64_memblock_init(void)
 {
