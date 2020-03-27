@@ -1,7 +1,8 @@
 # Linux低精度timer
 
-linux低精度timer实现学习个分析
+linux低精度timer实现学习分析
 内核版本 linux 4.0
+
 [TOC]
 
 ## timer使用
@@ -48,7 +49,7 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 	expires = apply_slack(timer, expires);
     /*
      *mod_timer也可以直接调用，来重启已经到期或未到期的timer，见该函数注释
-     *这里用判断如果timer没有被处理，并且到期时间就为现在，则不处理。
+     *如果是pending的，且到期时间就为现在，则不处理。
      */
 	if (timer_pending(timer) && timer->expires == expires)
 		return 1;
@@ -156,9 +157,6 @@ struct tvec_root {
 ### \__internal_add_timer
 
 ```c
-
-
-
 static void
 __internal_add_timer(struct tvec_base *base, struct timer_list *timer)
 {
