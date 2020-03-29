@@ -106,7 +106,7 @@ sub sp, sp, #S_FRAME_SIZE
 .if \regsize == 32
 mov w0, w0				// zero upper 32 bits of x0
 .endif
-/*一次压栈连个寄存器，所以要乘以16，一个寄存器64bit，执行完之后sp的值是不变的*/
+/*一次压栈两个寄存器，所以要乘以16，一个寄存器64bit，执行完之后sp的值是不变的*/
 stp x0, x1, [sp, #16 * 0]	
 stp x2, x3, [sp, #16 * 1]
 stp x4, x5, [sp, #16 * 2]
