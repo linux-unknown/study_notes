@@ -1,5 +1,7 @@
 # run_init_process如何返回用户态
 
+[TOC]
+
 run_init_process的调用过程
 
 ## rest_init
@@ -577,7 +579,7 @@ and	\rd, \rd, #~(THREAD_SIZE - 1)	// top of stack
 /* 将栈指针赋值给x28 */
 mov	x28, sp
 /* x28与上#~(THREAD_SIZE - 1)则得到栈顶 */
-and	x28, x28, #~(THREAD_SIZE - 1)	// top of stack，栈从高相低增长
+and	x28, x28, #~(THREAD_SIZE - 1)	// top of stack，栈从高向低增长
 ```
 
 ###### ret_to_user
