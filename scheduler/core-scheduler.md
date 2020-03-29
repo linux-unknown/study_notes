@@ -82,6 +82,8 @@ signed long __sched schedule_timeout(signed long timeout)
 
 ### process_timeout
 
+到期后执行process_timeout，唤醒睡眠的进程
+
 ```c
 static void process_timeout(unsigned long __data)
 {
@@ -584,7 +586,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
 ENTRY(cpu_switch_to)
 	/* x0为prev，x1为next*/
 	/* x8为prev.thread.cpu_context的指针*/
-	/* DEFINE(THREAD_CPU_CONTEXT,	offsetof(struct task_struct, thread.cpu_context));*/
+	/* DEFINE(THREAD_CPU_CONTEXT, offsetof(struct task_struct, thread.cpu_context));*/
 	add	x8, x0, #THREAD_CPU_CONTEXT   	
 	mov	x9, sp
 	/*
