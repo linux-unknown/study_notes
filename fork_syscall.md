@@ -160,7 +160,7 @@ el0_sync:
 
 ##### get_thread_info
 
-```
+```assembly
 tsk	.req	x28		// current thread_info
 
 .macro	get_thread_info, rd
@@ -283,11 +283,9 @@ __SYSCALL(__NR_fork, sys_ni_syscall)
 #endif /* CONFIG_MMU */
 ```
 
-
-
 ### sys_fork
 
-```assembly
+```c
 SYSCALL_DEFINE0(fork)
 {
 	return do_fork(SIGCHLD, 0, 0, NULL, NULL);
@@ -773,7 +771,7 @@ static inline int mm_alloc_pgd(struct mm_struct *mm)
 }
 ```
 
-```
+```c
 static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 {
 	struct vm_area_struct *mpnt, *tmp, *prev, **pprev;
