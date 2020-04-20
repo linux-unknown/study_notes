@@ -1425,7 +1425,7 @@ static void sdhci_set_card_detection(struct sdhci_host *host, bool enable)
 
 	if (enable) {
 		present = sdhci_readl(host, SDHCI_PRESENT_STATE) & SDHCI_CARD_PRESENT;
-		/* 使card 在位检测，这个和cd pin有什么不同，还不清楚 */
+		/* 使能card 在位检测，这个和cd pin有什么不同，还不清楚 */
 		host->ier |= present ? SDHCI_INT_CARD_REMOVE : SDHCI_INT_CARD_INSERT;
 	} else {
 		host->ier &= ~(SDHCI_INT_CARD_REMOVE | SDHCI_INT_CARD_INSERT);
@@ -1433,6 +1433,522 @@ static void sdhci_set_card_detection(struct sdhci_host *host, bool enable)
 
 	sdhci_writel(host, host->ier, SDHCI_INT_ENABLE);
 	sdhci_writel(host, host->ier, SDHCI_SIGNAL_ENABLE);
+}
+```
+
+##### mmc_gpio_cd_irqt
+
+```c
+static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
+{
+	/* Schedule a card detection after a debounce timeout */
+	struct mmc_host *host = dev_id;
+	struct mmc_gpio *ctx = host->slot.handler_priv;
+
+	host->trigger_card_event = true;
+    /* 启用mmc_rescan工作队列 */
+	mmc_detect_change(host, msecs_to_jiffies(ctx->cd_debounce_delay_ms));
+	return IRQ_HANDLED;
+}
+
+/**
+ *	mmc_detect_change - process change of state on a MMC socket
+ *	@host: host which changed state.
+ *	@delay: optional delay to wait before detection (jiffies)
+ *
+ *	MMC drivers should call this when they detect a card has been
+ *	inserted or removed. The MMC layer will confirm that any
+ *	present card is still functional, and initialize any newly
+ *	inserted.
+ */
+void mmc_detect_change(struct mmc_host *host, unsigned long delay)
+{
+	_mmc_detect_change(host, delay, true);
+}
+```
+
+## mmc_rescan
+
+```c
+void mmc_rescan(struct work_struct *work)
+{
+	struct mmc_host *host = container_of(work, struct mmc_host, detect.work);
+	int i;
+
+	if (host->rescan_disable)
+		return;
+
+	/* If there is a non-removable card registered, only scan once */
+	if (!mmc_card_is_removable(host) && host->rescan_entered)
+		return;
+	host->rescan_entered = 1;
+
+	if (host->trigger_card_event && host->ops->card_event) {
+		mmc_claim_host(host);
+		host->ops->card_event(host);
+		mmc_release_host(host);
+		host->trigger_card_event = false;
+	}
+
+	mmc_bus_get(host);
+
+	/*
+	 * if there is a _removable_ card registered, check whether it is
+	 * still present
+	 */
+	if (host->bus_ops && !host->bus_dead && mmc_card_is_removable(host))
+		host->bus_ops->detect(host);
+
+	host->detect_change = 0;
+
+	/*
+	 * Let mmc_bus_put() free the bus/bus_ops if we've found that
+	 * the card is no longer present.
+	 */
+	mmc_bus_put(host);
+	mmc_bus_get(host);
+
+	/* if there still is a card present, stop here */
+	if (host->bus_ops != NULL) {
+		mmc_bus_put(host);
+		goto out;
+	}
+
+	/*
+	 * Only we can add a new handler, so it's safe to
+	 * release the lock here.
+	 */
+	mmc_bus_put(host);
+
+	mmc_claim_host(host);
+	if (mmc_card_is_removable(host) && host->ops->get_cd &&
+			host->ops->get_cd(host) == 0) {
+		mmc_power_off(host);
+		mmc_release_host(host);
+		goto out;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(freqs); i++) {
+        /* 进行扫描 */
+		if (!mmc_rescan_try_freq(host, max(freqs[i], host->f_min)))
+			break;
+		if (freqs[i] <= host->f_min)
+			break;
+	}
+	mmc_release_host(host);
+
+ out:
+	if (host->caps & MMC_CAP_NEEDS_POLL)
+		mmc_schedule_delayed_work(&host->detect, HZ);
+}
+```
+
+### mmc_rescan_try_freq
+
+```c
+static int mmc_rescan_try_freq(struct mmc_host *host, unsigned freq)
+{
+	host->f_init = freq;
+
+	pr_debug("%s: %s: trying to init card at %u Hz\n",
+		mmc_hostname(host), __func__, host->f_init);
+
+	mmc_power_up(host, host->ocr_avail);
+
+	/*
+	 * Some eMMCs (with VCCQ always on) may not be reset after power up, so
+	 * do a hardware reset if possible.
+	 */
+	mmc_hw_reset_for_init(host);
+
+	/*
+	 * sdio_reset sends CMD52 to reset card.  Since we do not know
+	 * if the card is being re-initialized, just send it.  CMD52
+	 * should be ignored by SD/eMMC cards.
+	 * Skip it if we already know that we do not support SDIO commands
+	 */
+	if (!(host->caps2 & MMC_CAP2_NO_SDIO))
+		sdio_reset(host);
+
+	mmc_go_idle(host);
+
+	if (!(host->caps2 & MMC_CAP2_NO_SD))
+		mmc_send_if_cond(host, host->ocr_avail);
+
+    /* 扫描不同的设备，至于怎么区分还不是很清楚 */
+	/* Order's important: probe SDIO, then SD, then MMC */
+	if (!(host->caps2 & MMC_CAP2_NO_SDIO))
+		if (!mmc_attach_sdio(host))
+			return 0;
+
+	if (!(host->caps2 & MMC_CAP2_NO_SD))
+		if (!mmc_attach_sd(host))
+			return 0;
+
+	if (!(host->caps2 & MMC_CAP2_NO_MMC))
+		if (!mmc_attach_mmc(host)) /* 我们以emmc为例进程分析 */
+			return 0;
+
+	mmc_power_off(host);
+	return -EIO;
+}
+```
+
+#### mmc_attach_mmc
+
+```c
+/*
+ * Starting point for MMC card init.
+ */
+int mmc_attach_mmc(struct mmc_host *host)
+{
+	int err;
+	u32 ocr, rocr;
+
+	/* Set correct bus mode for MMC before attempting attach */
+	if (!mmc_host_is_spi(host))
+		mmc_set_bus_mode(host, MMC_BUSMODE_OPENDRAIN);
+
+	err = mmc_send_op_cond(host, 0, &ocr);
+
+	mmc_attach_bus(host, &mmc_ops);
+	if (host->ocr_avail_mmc)
+		host->ocr_avail = host->ocr_avail_mmc;
+
+	/*
+	 * We need to get OCR a different way for SPI.
+	 */
+	if (mmc_host_is_spi(host)) {
+		err = mmc_spi_read_ocr(host, 1, &ocr);
+	}
+
+	rocr = mmc_select_voltage(host, ocr);
+	/*
+	 * Detect and init the card.
+	 */
+	err = mmc_init_card(host, rocr, NULL);
+	
+	mmc_release_host(host);
+	err = mmc_add_card(host->card);
+	mmc_claim_host(host);
+	return 0;
+}
+```
+
+##### mmc_init_card
+
+```c
+/*
+ * Handle the detection and initialisation of a card.
+ *
+ * In the case of a resume, "oldcard" will contain the card
+ * we're trying to reinitialise.
+ */
+static int mmc_init_card(struct mmc_host *host, u32 ocr, struct mmc_card *oldcard)
+{
+	struct mmc_card *card;
+	int err;
+	u32 cid[4];
+	u32 rocr;
+
+	/* Set correct bus mode for MMC before attempting init */
+	if (!mmc_host_is_spi(host))
+		mmc_set_bus_mode(host, MMC_BUSMODE_OPENDRAIN);
+
+	/*
+	 * Since we're changing the OCR value, we seem to
+	 * need to tell some cards to go back to the idle
+	 * state.  We wait 1ms to give cards time to
+	 * respond.
+	 * mmc_go_idle is needed for eMMC that are asleep
+	 */
+	mmc_go_idle(host);
+
+	/* The extra bit indicates that we support high capacity */
+	err = mmc_send_op_cond(host, ocr | (1 << 30), &rocr);
+
+	/*
+	 * For SPI, enable CRC as appropriate.
+	 */
+	if (mmc_host_is_spi(host)) {
+		err = mmc_spi_set_crc(host, use_spi_crc);
+	}
+
+	/*
+	 * Fetch CID from card.
+	 */
+	err = mmc_send_cid(host, cid);
+
+	if (oldcard) {
+		if (memcmp(cid, oldcard->raw_cid, sizeof(cid)) != 0) {
+		}
+		card = oldcard;
+	} else {
+		/*
+		 * Allocate card structure.
+		 */
+		card = mmc_alloc_card(host, &mmc_type);
+		card->ocr = ocr;
+		card->type = MMC_TYPE_MMC;
+		card->rca = 1;
+		memcpy(card->raw_cid, cid, sizeof(card->raw_cid));
+	}
+
+	/*
+	 * Call the optional HC's init_card function to handle quirks.
+	 */
+	if (host->ops->init_card)
+		host->ops->init_card(host, card);
+
+	/*
+	 * For native busses:  set card RCA and quit open drain mode.
+	 */
+	if (!mmc_host_is_spi(host)) {
+		err = mmc_set_relative_addr(card);
+
+		mmc_set_bus_mode(host, MMC_BUSMODE_PUSHPULL);
+	}
+
+	if (!oldcard) {
+		/*
+		 * Fetch CSD from card.
+		 */
+		err = mmc_send_csd(card, card->raw_csd);
+		err = mmc_decode_csd(card);
+		err = mmc_decode_cid(card);
+	}
+
+	/*
+	 * handling only for cards supporting DSR and hosts requesting
+	 * DSR configuration
+	 */
+	if (card->csd.dsr_imp && host->dsr_req)
+		mmc_set_dsr(host);
+
+	/*
+	 * Select card, as all following commands rely on that.
+	 */
+	if (!mmc_host_is_spi(host)) {
+		err = mmc_select_card(card);
+	}
+
+	if (!oldcard) {
+		/* Read extended CSD. */
+		err = mmc_read_ext_csd(card);
+
+		/*
+		 * If doing byte addressing, check if required to do sector
+		 * addressing.  Handle the case of <2GB cards needing sector
+		 * addressing.  See section 8.1 JEDEC Standard JED84-A441;
+		 * ocr register has bit 30 set for sector addressing.
+		 */
+		if (rocr & BIT(30))
+			mmc_card_set_blockaddr(card);
+
+		/* Erase size depends on CSD and Extended CSD */
+		mmc_set_erase_size(card);
+	}
+
+	/* Enable ERASE_GRP_DEF. This bit is lost after a reset or power off. */
+	if (card->ext_csd.rev >= 3) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				 EXT_CSD_ERASE_GROUP_DEF, 1,
+				 card->ext_csd.generic_cmd6_time);
+
+		if (err && err != -EBADMSG)
+			goto free_card;
+
+		if (err) {
+			err = 0;
+			/*
+			 * Just disable enhanced area off & sz
+			 * will try to enable ERASE_GROUP_DEF
+			 * during next time reinit
+			 */
+			card->ext_csd.enhanced_area_offset = -EINVAL;
+			card->ext_csd.enhanced_area_size = -EINVAL;
+		} else {
+			card->ext_csd.erase_group_def = 1;
+			/*
+			 * enable ERASE_GRP_DEF successfully.
+			 * This will affect the erase size, so
+			 * here need to reset erase size
+			 */
+			mmc_set_erase_size(card);
+		}
+	}
+
+	/*
+	 * Ensure eMMC user default partition is enabled
+	 */
+	if (card->ext_csd.part_config & EXT_CSD_PART_CONFIG_ACC_MASK) {
+		card->ext_csd.part_config &= ~EXT_CSD_PART_CONFIG_ACC_MASK;
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_PART_CONFIG,
+				 card->ext_csd.part_config,
+				 card->ext_csd.part_time);
+		if (err && err != -EBADMSG)
+			goto free_card;
+	}
+
+	/*
+	 * Enable power_off_notification byte in the ext_csd register
+	 */
+	if (card->ext_csd.rev >= 6) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				 EXT_CSD_POWER_OFF_NOTIFICATION,
+				 EXT_CSD_POWER_ON,
+				 card->ext_csd.generic_cmd6_time);
+		if (err && err != -EBADMSG)
+			goto free_card;
+
+		/*
+		 * The err can be -EBADMSG or 0,
+		 * so check for success and update the flag
+		 */
+		if (!err)
+			card->ext_csd.power_off_notification = EXT_CSD_POWER_ON;
+	}
+
+	/*
+	 * Select timing interface
+	 */
+	err = mmc_select_timing(card);
+
+
+	if (mmc_card_hs200(card)) {
+		err = mmc_hs200_tuning(card);
+		err = mmc_select_hs400(card);
+	} else if (!mmc_card_hs400es(card)) {
+		/* Select the desired bus width optionally */
+		err = mmc_select_bus_width(card);
+		if (err > 0 && mmc_card_hs(card)) {
+			err = mmc_select_hs_ddr(card);
+		}
+	}
+
+	/*
+	 * Choose the power class with selected bus interface
+	 */
+	mmc_select_powerclass(card);
+
+	/*
+	 * Enable HPI feature (if supported)
+	 */
+	if (card->ext_csd.hpi) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				EXT_CSD_HPI_MGMT, 1,
+				card->ext_csd.generic_cmd6_time);
+		if (err && err != -EBADMSG)
+			goto free_card;
+		if (err) {
+			pr_warn("%s: Enabling HPI failed\n",
+				mmc_hostname(card->host));
+			err = 0;
+		} else
+			card->ext_csd.hpi_en = 1;
+	}
+
+	/*
+	 * If cache size is higher than 0, this indicates
+	 * the existence of cache and it can be turned on.
+	 */
+	if (!mmc_card_broken_hpi(card) &&
+	    card->ext_csd.cache_size > 0) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+				EXT_CSD_CACHE_CTRL, 1,
+				card->ext_csd.generic_cmd6_time);
+		if (err && err != -EBADMSG)
+			goto free_card;
+
+		/*
+		 * Only if no error, cache is turned on successfully.
+		 */
+		if (err) {
+			pr_warn("%s: Cache is supported, but failed to turn on (%d)\n",
+				mmc_hostname(card->host), err);
+			card->ext_csd.cache_ctrl = 0;
+			err = 0;
+		} else {
+			card->ext_csd.cache_ctrl = 1;
+		}
+	}
+
+	/*
+	 * Enable Command Queue if supported. Note that Packed Commands cannot
+	 * be used with Command Queue.
+	 */
+	card->ext_csd.cmdq_en = false;
+	if (card->ext_csd.cmdq_support && host->caps2 & MMC_CAP2_CQE) {
+		err = mmc_cmdq_enable(card);
+		if (err && err != -EBADMSG)
+			goto free_card;
+		if (err) {
+			pr_warn("%s: Enabling CMDQ failed\n",
+				mmc_hostname(card->host));
+			card->ext_csd.cmdq_support = false;
+			card->ext_csd.cmdq_depth = 0;
+			err = 0;
+		}
+	}
+	/*
+	 * In some cases (e.g. RPMB or mmc_test), the Command Queue must be
+	 * disabled for a time, so a flag is needed to indicate to re-enable the
+	 * Command Queue.
+	 */
+	card->reenable_cmdq = card->ext_csd.cmdq_en;
+
+	if (card->ext_csd.cmdq_en && !host->cqe_enabled) {
+		err = host->cqe_ops->cqe_enable(host, card);
+		if (err) {
+			pr_err("%s: Failed to enable CQE, error %d\n",
+				mmc_hostname(host), err);
+		} else {
+			host->cqe_enabled = true;
+			pr_info("%s: Command Queue Engine enabled\n",
+				mmc_hostname(host));
+		}
+	}
+
+	if (host->caps2 & MMC_CAP2_AVOID_3_3V &&
+	    host->ios.signal_voltage == MMC_SIGNAL_VOLTAGE_330) {
+		pr_err("%s: Host failed to negotiate down from 3.3V\n",
+			mmc_hostname(host));
+		err = -EINVAL;
+		goto free_card;
+	}
+
+	if (!oldcard)
+		host->card = card;
+
+	return 0;
+
+free_card:
+	if (!oldcard)
+		mmc_remove_card(card);
+err:
+	return err;
+}
+```
+
+###### mmc_alloc_card
+
+```c
+/*
+ * Allocate and initialise a new MMC card structure.
+ */
+struct mmc_card *mmc_alloc_card(struct mmc_host *host, struct device_type *type)
+{
+	struct mmc_card *card;
+
+	card = kzalloc(sizeof(struct mmc_card), GFP_KERNEL);
+	card->host = host;
+	device_initialize(&card->dev);
+	card->dev.parent = mmc_classdev(host);
+	card->dev.bus = &mmc_bus_type;
+	card->dev.release = mmc_release_card;
+	card->dev.type = type;
+
+	return card;
 }
 ```
 
