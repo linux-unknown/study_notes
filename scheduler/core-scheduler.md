@@ -165,10 +165,10 @@ static void __sched __schedule(void)
 	prev = rq->curr;
     
 	/* 检查是否在atomic，如果在atomic则报错 
-	 * preempt_count() & ~PREEMPT_ACTIVE) != PREEMPT_CHECK_OFFSET则表示在atomic
+	 * (preempt_count() & ~PREEMPT_ACTIVE) != PREEMPT_CHECK_OFFSET则表示在atomic。
+	 * ~PREEMPT_ACTIVE表示除了PREEMPT_ACTIVE表示除了位，其他为为1，既PREEMPT_BITS，或
+	 * SOFTIRQ_BITS或HARDIRQ_BITS或NMI_BITS这些字段不为1，则表示是在atomic环境
 	 * PREEMPT_CHECK_OFFSET为1，
-	 * 因为在这之前调用了preempt_disable()，所以 preempt_count() & ~PREEMPT_ACTIVE)应为1
-	 * preempt_disable()和preempt_enable()要成对调用，可以嵌套调用。
 	 */
 	schedule_debug(prev);
 	/* 
@@ -947,7 +947,7 @@ static __always_inline void __preempt_count_add(int val)
 ```c
 static __always_inline int *preempt_count_ptr(void)
 {
-	return &current_thread_info()->preempt_count;c
+	return &current_thread_info()->preempt_count;
 }
 ```
 
