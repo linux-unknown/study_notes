@@ -1,5 +1,7 @@
 # linux mmc初始化过程
 
+[TOC]
+
 以xilinx zynq sdhci-of-arasan.c驱动为例，不涉及mmc硬件以及协议相关
 
 ## platform_driver驱动：
@@ -160,7 +162,6 @@ static const struct sdhci_pltfm_data sdhci_arasan_pdata = {
 			SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN |
 			SDHCI_QUIRK2_STOP_WITH_TC,
 };
-
 ```
 
 ## sdhci_pltfm_init
@@ -1835,14 +1836,12 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr, struct mmc_card *oldcar
 	 * Enable HPI feature (if supported)
 	 */
 	if (card->ext_csd.hpi) {
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				EXT_CSD_HPI_MGMT, 1,
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_HPI_MGMT, 1,
 				card->ext_csd.generic_cmd6_time);
 		if (err && err != -EBADMSG)
 			goto free_card;
 		if (err) {
-			pr_warn("%s: Enabling HPI failed\n",
-				mmc_hostname(card->host));
+			pr_warn("%s: Enabling HPI failed\n", mmc_hostname(card->host));
 			err = 0;
 		} else
 			card->ext_csd.hpi_en = 1;
@@ -1854,8 +1853,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr, struct mmc_card *oldcar
 	 */
 	if (!mmc_card_broken_hpi(card) &&
 	    card->ext_csd.cache_size > 0) {
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
-				EXT_CSD_CACHE_CTRL, 1,
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_CACHE_CTRL, 1,
 				card->ext_csd.generic_cmd6_time);
 		if (err && err != -EBADMSG)
 			goto free_card;
@@ -1883,8 +1881,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr, struct mmc_card *oldcar
 		if (err && err != -EBADMSG)
 			goto free_card;
 		if (err) {
-			pr_warn("%s: Enabling CMDQ failed\n",
-				mmc_hostname(card->host));
+			pr_warn("%s: Enabling CMDQ failed\n", mmc_hostname(card->host));
 			card->ext_csd.cmdq_support = false;
 			card->ext_csd.cmdq_depth = 0;
 			err = 0;
@@ -1900,12 +1897,10 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr, struct mmc_card *oldcar
 	if (card->ext_csd.cmdq_en && !host->cqe_enabled) {
 		err = host->cqe_ops->cqe_enable(host, card);
 		if (err) {
-			pr_err("%s: Failed to enable CQE, error %d\n",
-				mmc_hostname(host), err);
+			pr_err("%s: Failed to enable CQE, error %d\n", mmc_hostname(host), err);
 		} else {
 			host->cqe_enabled = true;
-			pr_info("%s: Command Queue Engine enabled\n",
-				mmc_hostname(host));
+			pr_info("%s: Command Queue Engine enabled\n", mmc_hostname(host));
 		}
 	}
 
@@ -1949,6 +1944,503 @@ struct mmc_card *mmc_alloc_card(struct mmc_host *host, struct device_type *type)
 	card->dev.type = type;
 
 	return card;
+}
+```
+
+##### mmc_add_card
+
+```c
+/*
+ * Register a new MMC card with the driver model.
+ */
+int mmc_add_card(struct mmc_card *card)
+{
+	int ret;
+	const char *type;
+	const char *uhs_bus_speed_mode = "";
+	static const char *const uhs_speeds[] = {
+		[UHS_SDR12_BUS_SPEED] = "SDR12 ",
+		[UHS_SDR25_BUS_SPEED] = "SDR25 ",
+		[UHS_SDR50_BUS_SPEED] = "SDR50 ",
+		[UHS_SDR104_BUS_SPEED] = "SDR104 ",
+		[UHS_DDR50_BUS_SPEED] = "DDR50 ",
+	};
+
+	dev_set_name(&card->dev, "%s:%04x", mmc_hostname(card->host), card->rca);
+
+	switch (card->type) {
+	case MMC_TYPE_MMC:
+		type = "MMC";
+		break;
+	case MMC_TYPE_SD:
+		type = "SD";
+		if (mmc_card_blockaddr(card)) {
+			if (mmc_card_ext_capacity(card))
+				type = "SDXC";
+			else
+				type = "SDHC";
+		}
+		break;
+	case MMC_TYPE_SDIO:
+		type = "SDIO";
+		break;
+	case MMC_TYPE_SD_COMBO:
+		type = "SD-combo";
+		if (mmc_card_blockaddr(card))
+			type = "SDHC-combo";
+		break;
+	default:
+		type = "?";
+		break;
+	}
+
+	if (mmc_card_uhs(card) &&
+		(card->sd_bus_speed < ARRAY_SIZE(uhs_speeds)))
+		uhs_bus_speed_mode = uhs_speeds[card->sd_bus_speed];
+
+	if (mmc_host_is_spi(card->host)) {
+		pr_info("%s: new %s%s%s card on SPI\n",
+			mmc_hostname(card->host),
+			mmc_card_hs(card) ? "high speed " : "",
+			mmc_card_ddr52(card) ? "DDR " : "",
+			type);
+	} else {
+		pr_info("%s: new %s%s%s%s%s%s card at address %04x\n",
+			mmc_hostname(card->host),
+			mmc_card_uhs(card) ? "ultra high speed " :
+			(mmc_card_hs(card) ? "high speed " : ""),
+			mmc_card_hs400(card) ? "HS400 " :
+			(mmc_card_hs200(card) ? "HS200 " : ""),
+			mmc_card_hs400es(card) ? "Enhanced strobe " : "",
+			mmc_card_ddr52(card) ? "DDR " : "",
+			uhs_bus_speed_mode, type, card->rca);
+	}
+
+#ifdef CONFIG_DEBUG_FS
+	mmc_add_card_debugfs(card);
+#endif
+	card->dev.of_node = mmc_of_find_child_device(card->host, 0);
+
+	device_enable_async_suspend(&card->dev);
+
+	/*注册device，将会调用mmc_driver的probe函数 */
+	ret = device_add(&card->dev);
+
+	mmc_card_set_present(card);
+
+	return 0;
+}
+
+#define mmc_card_set_present(c)	((c)->state |= MMC_STATE_PRESENT)
+```
+
+## mmc block
+
+mmc_driver
+
+```c
+static struct mmc_driver mmc_driver = {
+	.drv		= {
+		.name	= "mmcblk",
+		.pm	= &mmc_blk_pm_ops,
+	},
+	.probe		= mmc_blk_probe,
+	.remove		= mmc_blk_remove,
+	.shutdown	= mmc_blk_shutdown,
+};
+```
+
+### mmc_blk_init
+
+```c
+#define MMC_BLOCK_MAJOR		179
+
+static int __init mmc_blk_init(void)
+{
+	int res;
+
+	res  = bus_register(&mmc_rpmb_bus_type);
+
+	res = alloc_chrdev_region(&mmc_rpmb_devt, 0, MAX_DEVICES, "rpmb");
+
+	if (perdev_minors != CONFIG_MMC_BLOCK_MINORS)
+		pr_info("mmcblk: using %d minors per device\n", perdev_minors);
+
+	max_devices = min(MAX_DEVICES, (1 << MINORBITS) / perdev_minors);
+	/* 注册块设备 */
+	res = register_blkdev(MMC_BLOCK_MAJOR, "mmc");
+
+	res = mmc_register_driver(&mmc_driver);
+
+	return 0;
+}
+```
+
+mmc_bus_type
+
+```c
+static struct bus_type mmc_bus_type = {
+	.name		= "mmc",
+	.dev_groups	= mmc_dev_groups,
+	.match		= mmc_bus_match, /* mmc_bus_match直接返回1 */
+	.uevent		= mmc_bus_uevent,
+	.probe		= mmc_bus_probe,
+	.remove		= mmc_bus_remove,
+	.shutdown	= mmc_bus_shutdown,
+	.pm		= &mmc_bus_pm_ops,
+};
+```
+
+### mmc_blk_probe
+
+```c
+static int mmc_blk_probe(struct mmc_card *card)
+{
+	struct mmc_blk_data *md, *part_md;
+	char cap_str[10];
+
+	/*
+	 * Check that the card supports the command class(es) we need.
+	 */
+	if (!(card->csd.cmdclass & CCC_BLOCK_READ))
+		return -ENODEV;
+
+	mmc_fixup_device(card, mmc_blk_fixups);
+	/* 初始化块设备相关的东西 */
+	md = mmc_blk_alloc(card);
+
+	string_get_size((u64)get_capacity(md->disk), 512, STRING_UNITS_2,
+			cap_str, sizeof(cap_str));
+
+	pr_info("%s: %s %s %s %s\n",
+		md->disk->disk_name, mmc_card_id(card), mmc_card_name(card),
+		cap_str, md->read_only ? "(ro)" : "");
+
+	if (mmc_blk_alloc_parts(card, md))
+		goto out;
+
+	dev_set_drvdata(&card->dev, md);
+
+	if (mmc_add_disk(md))
+		goto out;
+
+    /*  注册各个分区 */
+	list_for_each_entry(part_md, &md->part, part) {
+		if (mmc_add_disk(part_md))
+			goto out;
+	}
+
+	/* Add two debugfs entries */
+	mmc_blk_add_debugfs(card, md);
+
+	pm_runtime_set_autosuspend_delay(&card->dev, 3000);
+	pm_runtime_use_autosuspend(&card->dev);
+
+	/*
+	 * Don't enable runtime PM for SD-combo cards here. Leave that
+	 * decision to be taken during the SDIO init sequence instead.
+	 */
+	if (card->type != MMC_TYPE_SD_COMBO) {
+		pm_runtime_set_active(&card->dev);
+		pm_runtime_enable(&card->dev);
+	}
+
+	return 0;
+
+ out:
+	mmc_blk_remove_parts(card, md);
+	mmc_blk_remove_req(md);
+	return 0;
+}
+
+```
+
+#### mmc_blk_alloc
+
+```c
+static struct mmc_blk_data *mmc_blk_alloc(struct mmc_card *card)
+{
+	sector_t size;
+
+	if (!mmc_card_sd(card) && mmc_card_blockaddr(card)) {
+		/*
+		 * The EXT_CSD sector count is in number or 512 byte
+		 * sectors.
+		 */
+		size = card->ext_csd.sectors;
+	} else {
+		/*
+		 * The CSD capacity field is in units of read_blkbits.
+		 * set_capacity takes units of 512 bytes.
+		 */
+		size = (typeof(sector_t))card->csd.capacity << (card->csd.read_blkbits - 9);
+	}
+
+	return mmc_blk_alloc_req(card, &card->dev, size, false, NULL,
+					MMC_BLK_DATA_AREA_MAIN);
+}
+```
+
+##### mmc_blk_alloc_req
+
+```c
+static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
+					      struct device *parent,
+					      sector_t size,
+					      bool default_ro,
+					      const char *subname,
+					      int area_type)
+{
+	struct mmc_blk_data *md;
+	int devidx, ret;
+
+	devidx = ida_simple_get(&mmc_blk_ida, 0, max_devices, GFP_KERNEL);
+
+	md = kzalloc(sizeof(struct mmc_blk_data), GFP_KERNEL);
+
+	md->area_type = area_type;
+
+	/*
+	 * Set the read-only status based on the supported commands
+	 * and the write protect switch.
+	 */
+	md->read_only = mmc_blk_readonly(card);
+	/* 分配disk */
+	md->disk = alloc_disk(perdev_minors);
+
+	spin_lock_init(&md->lock);
+	INIT_LIST_HEAD(&md->part);
+	INIT_LIST_HEAD(&md->rpmbs);
+	md->usage = 1;
+
+	ret = mmc_init_queue(&md->queue, card, &md->lock, subname);
+
+	md->queue.blkdata = md;
+	/*
+	 * Keep an extra reference to the queue so that we can shutdown the
+	 * queue (i.e. call blk_cleanup_queue()) while there are still
+	 * references to the 'md'. The corresponding blk_put_queue() is in
+	 * mmc_blk_put().
+	 */
+	if (!blk_get_queue(md->queue.queue)) {
+	}
+
+	md->disk->major	= MMC_BLOCK_MAJOR;
+	md->disk->first_minor = devidx * perdev_minors;
+	md->disk->fops = &mmc_bdops;
+	md->disk->private_data = md;
+	md->disk->queue = md->queue.queue;
+	md->parent = parent;
+	set_disk_ro(md->disk, md->read_only || default_ro);
+	md->disk->flags = GENHD_FL_EXT_DEVT;
+
+	if (area_type & (MMC_BLK_DATA_AREA_RPMB | MMC_BLK_DATA_AREA_BOOT))
+		md->disk->flags |= GENHD_FL_NO_PART_SCAN | GENHD_FL_SUPPRESS_PARTITION_INFO;
+
+	/*
+	 * As discussed on lkml, GENHD_FL_REMOVABLE should:
+	 *
+	 * - be set for removable media with permanent block devices
+	 * - be unset for removable block devices with permanent media
+	 *
+	 * Since MMC block devices clearly fall under the second
+	 * case, we do not set GENHD_FL_REMOVABLE.  Userspace
+	 * should use the block device creation/destruction hotplug
+	 * messages to tell when the card is present.
+	 */
+	/* mmc设备的块设备名称为mmcblk开头 */
+	snprintf(md->disk->disk_name, sizeof(md->disk->disk_name),
+		 "mmcblk%u%s", card->host->index, subname ? subname : "");
+
+	if (mmc_card_mmc(card))
+		blk_queue_logical_block_size(md->queue.queue,card->ext_csd.data_sector_size);
+	else
+		blk_queue_logical_block_size(md->queue.queue, 512);
+
+	set_capacity(md->disk, size);
+
+	if (mmc_host_cmd23(card->host)) {
+		if ((mmc_card_mmc(card) && card->csd.mmca_vsn >= CSD_SPEC_VER_3) ||
+		    (mmc_card_sd(card) && card->scr.cmds & SD_SCR_CMD23_SUPPORT))
+			md->flags |= MMC_BLK_CMD23;
+	}
+
+	if (mmc_card_mmc(card) && md->flags & MMC_BLK_CMD23 &&
+	    ((card->ext_csd.rel_param & EXT_CSD_WR_REL_PARAM_EN) ||
+	     card->ext_csd.rel_sectors)) {
+		md->flags |= MMC_BLK_REL_WR;
+		blk_queue_write_cache(md->queue.queue, true, true);
+	}
+
+	return md;
+}
+```
+
+##### mmc_blk_alloc_parts
+
+```c
+/* MMC Physical partitions consist of two boot partitions and
+ * up to four general purpose partitions.
+ * For each partition enabled in EXT_CSD a block device will be allocatedi
+ * to provide access to the partition.
+ */
+
+static int mmc_blk_alloc_parts(struct mmc_card *card, struct mmc_blk_data *md)
+{
+	int idx, ret;
+
+	if (!mmc_card_mmc(card))
+		return 0;
+
+	for (idx = 0; idx < card->nr_parts; idx++) {
+		if (card->part[idx].area_type & MMC_BLK_DATA_AREA_RPMB) {
+			/*
+			 * RPMB partitions does not provide block access, they
+			 * are only accessed using ioctl():s. Thus create
+			 * special RPMB block devices that do not have a
+			 * backing block queue for these.
+			 */
+			ret = mmc_blk_alloc_rpmb_part(card, md, card->part[idx].part_cfg,
+				card->part[idx].size >> 9,
+				card->part[idx].name);
+			if (ret)
+				return ret;
+		} else if (card->part[idx].size) {
+			ret = mmc_blk_alloc_part(card, md, card->part[idx].part_cfg,
+				card->part[idx].size >> 9,
+				card->part[idx].force_ro,
+				card->part[idx].name,
+				card->part[idx].area_type);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return 0;
+}
+```
+
+###### mmc_blk_alloc_rpmb_part
+
+```c
+static int mmc_blk_alloc_rpmb_part(struct mmc_card *card, struct mmc_blk_data *md,
+				   unsigned int part_index, sector_t size, const char *subname)
+{
+	int devidx, ret;
+	char rpmb_name[DISK_NAME_LEN];
+	char cap_str[10];
+	struct mmc_rpmb_data *rpmb;
+
+	/* This creates the minor number for the RPMB char device */
+	devidx = ida_simple_get(&mmc_rpmb_ida, 0, max_devices, GFP_KERNEL);
+
+	rpmb = kzalloc(sizeof(*rpmb), GFP_KERNEL);
+
+	snprintf(rpmb_name, sizeof(rpmb_name),
+		 "mmcblk%u%s", card->host->index, subname ? subname : "");
+
+	rpmb->id = devidx;
+	rpmb->part_index = part_index;
+	rpmb->dev.init_name = rpmb_name;
+	rpmb->dev.bus = &mmc_rpmb_bus_type;
+	rpmb->dev.devt = MKDEV(MAJOR(mmc_rpmb_devt), rpmb->id);
+	rpmb->dev.parent = &card->dev;
+	rpmb->dev.release = mmc_blk_rpmb_device_release;
+	device_initialize(&rpmb->dev);
+	dev_set_drvdata(&rpmb->dev, rpmb);
+	rpmb->md = md;
+
+	/* 注册字符设备驱动 */
+	cdev_init(&rpmb->chrdev, &mmc_rpmb_fileops);
+	rpmb->chrdev.owner = THIS_MODULE;
+	ret = cdev_device_add(&rpmb->chrdev, &rpmb->dev);
+
+	list_add(&rpmb->node, &md->rpmbs);
+
+	string_get_size((u64)size, 512, STRING_UNITS_2,
+			cap_str, sizeof(cap_str));
+
+	pr_info("%s: %s %s partition %u %s, chardev (%d:%d)\n",
+		rpmb_name, mmc_card_id(card),
+		mmc_card_name(card), EXT_CSD_PART_CONFIG_ACC_RPMB, cap_str,
+		MAJOR(mmc_rpmb_devt), rpmb->id);
+
+	return 0;
+}
+```
+
+##### mmc_blk_alloc_part
+
+```c
+static int mmc_blk_alloc_part(struct mmc_card *card, struct mmc_blk_data *md,
+			      unsigned int part_type, sector_t size, bool default_ro,
+			      const char *subname, int area_type)
+{
+	char cap_str[10];
+	struct mmc_blk_data *part_md;
+
+    /* 块设备相关初始化，分区也是块设备 */
+	part_md = mmc_blk_alloc_req(card, disk_to_dev(md->disk), size, default_ro,
+				    subname, area_type);
+
+	part_md->part_type = part_type;
+	list_add(&part_md->part, &md->part);
+
+	string_get_size((u64)get_capacity(part_md->disk), 512, STRING_UNITS_2,
+			cap_str, sizeof(cap_str));
+	pr_info("%s: %s %s partition %u %s\n",
+	       part_md->disk->disk_name, mmc_card_id(card),
+	       mmc_card_name(card), part_md->part_type, cap_str);
+	return 0;
+}
+```
+
+#### mmc_add_disk
+
+```c
+static int mmc_add_disk(struct mmc_blk_data *md)
+{
+	int ret;
+	struct mmc_card *card = md->queue.card;
+	/* 添加块设备 */
+	device_add_disk(md->parent, md->disk);
+ 
+	md->force_ro.show = force_ro_show;
+	md->force_ro.store = force_ro_store;
+	sysfs_attr_init(&md->force_ro.attr);
+	md->force_ro.attr.name = "force_ro";
+	md->force_ro.attr.mode = S_IRUGO | S_IWUSR;
+	ret = device_create_file(disk_to_dev(md->disk), &md->force_ro);
+
+	if ((md->area_type & MMC_BLK_DATA_AREA_BOOT) &&
+	     card->ext_csd.boot_ro_lockable) {
+		umode_t mode;
+
+		if (card->ext_csd.boot_ro_lock & EXT_CSD_BOOT_WP_B_PWR_WP_DIS)
+			mode = S_IRUGO;
+		else
+			mode = S_IRUGO | S_IWUSR;
+
+		md->power_ro_lock.show = power_ro_lock_show;
+		md->power_ro_lock.store = power_ro_lock_store;
+		sysfs_attr_init(&md->power_ro_lock.attr);
+		md->power_ro_lock.attr.mode = mode;
+		md->power_ro_lock.attr.name = "ro_lock_until_next_power_on";
+		ret = device_create_file(disk_to_dev(md->disk), &md->power_ro_lock);
+	
+	}
+	return ret;
+}
+
+```
+
+##### device_add_disk
+
+```c
+/* device_add_disk等同于add_disk，add_disk parent为NULL */
+void device_add_disk(struct device *parent, struct gendisk *disk)
+{
+	__device_add_disk(parent, disk, true);
 }
 ```
 
