@@ -28,3 +28,51 @@ Boot loader stage 3-3（BL33）：Non-trusted Firmware
 
 Aarch32略去
 
+
+
+Arm development platforms (Fixed Virtual Platforms (FVPs) and Juno) 实现了一个下面内存区域的组合，每一个bootloader阶段使用一个或多个这些内存区域
+
+- 可以从non-secure和secure状态访问的区域，比如non-trusted SRAM，ROM，DRAM
+
+- 只能从secure状态访问的区域，比如trusted SRAM和ROM，FVP也实现了trusted DRAM，是通过静态配置的。另外，FVP和Juno development platform 通过配置TrustZone Controller (TZC) 来创建DRAM的一个区域只能被secure状态访问。
+
+## BL1
+
+该阶段从平台的EL3的reset vector开始执行，reset address是platform相关的，但是通常是在Trusted ROM区域。BL1 打他段在运行时被复制到trusted SRAM
+
+在 Arm development platforms,BL1代码从reset vector开始执行，reset vector通过常量BL1_RO_BASE定义。BL1 data段被复制到trusted SRAM的顶部，被常量BL1_RW_BASE定义的地方
+
+### 确定boot path
+
+无论什么时候CPU从reset release，BL1需要区分是warm boot还是cold boot。这通过平台特定的机制，见plat_get_my_entrypoint()，在warm boot的情形下，cpu期望从单独的entrypoint继续执行。在cold boot情形下，secondary CPU被放在一个平台特定的安全状态（见plat_secondary_cold_boot_setup()），同时primary CPU执行剩下的cold boot path，描述如下：
+
+### 架构初始化
+
+BL1执行最小化的架构初始化，如下
+
+#### Execption vectors
+
+BL1设置简单的exception vectors，为synchronous and asynchronous exceptions。当收到一个exception默认的行为是在通用寄存器X0/R0填充一个状态码，然后调用plat_report_exception()，状态码是下面的之一：
+
+对于Aarch64：
+
+       0x0 : Synchronous exception from Current EL with SP_EL0
+       0x1 : IRQ exception from Current EL with SP_EL0
+       0x2 : FIQ exception from Current EL with SP_EL0
+       0x3 : System Error exception from Current EL with SP_EL0
+       0x4 : Synchronous exception from Current EL with SP_ELx
+       0x5 : IRQ exception from Current EL with SP_ELx
+       0x6 : FIQ exception from Current EL with SP_ELx
+       0x7 : System Error exception from Current EL with SP_ELx
+       0x8 : Synchronous exception from Lower EL using aarch64
+       0x9 : IRQ exception from Lower EL using aarch64
+       0xa : FIQ exception from Lower EL using aarch64
+       0xb : System Error exception from Lower EL using aarch64
+       0xc : Synchronous exception from Lower EL using aarch32
+       0xd : IRQ exception from Lower EL using aarch32
+       0xe : FIQ exception from Lower EL using aarch32
+       0xf : System Error exception from Lower EL using aarch32
+
+
+
+
