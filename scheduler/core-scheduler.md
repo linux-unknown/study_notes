@@ -190,11 +190,39 @@ static void __sched __schedule(void)
 	raw_spin_lock_irq(&rq->lock);
 
 	rq->clock_skip_update <<= 1; /* promote REQ to ACT */
-
+	/* nivcsw表示进程被动切换 */
 	switch_count = &prev->nivcsw;
 	/*
 	 * 如果是内核抢占，preempt_count() & PREEMPT_ACTIVE会不为0
 	 * 也可看出如果是kernel抢占，则不会调用deactivate_task
+	 * prev->state && !(preempt_count() & PREEMPT_ACTIVE用于防止
+	 * 防止非Running状态的进程被抢占过程错误地从Run Queue中移除，
+         * #define __wait_event(wq, condition)                 \                                          
+         * do {                                                  \
+         * DEFINE_WAIT(__wait);                                    \
+         *                                                           \
+         * for (;;) {                                                 \
+         *     prepare_to_wait(&wq, &__wait, TASK_UNINTERRUPTIBLE);   \
+         *     if (condition)                                         \
+         *         break;                                         \
+         *     schedule();                                              \
+         * }                                                            \
+         * finish_wait(&wq, &__wait);                                   \
+         * } while (0)
+	 * 被抢占则最终一定会调用schedule()
+	 * 第一种情形：prepare_to_wait()中如果只设置了task_struct的state后立即发生中断，中断返回时判断该进程可以被抢占，如果我们没有将当前进程的thread_info：preempt_count中置位
+	 * PREEMPT_ACTIVE，则当前进程将被剔除运行队列，这下问题来了：我们还没有将当前进程挂到等待队列，那么该进程将不可能再次运行。因此如果在内核态发生中断，且当前进程判断可以被抢占，
+	 * 则先调用preempt_schedule(),在preempt_schedule中会将thread_info：preempt_count加上PREEMPT_ACTIVE，而后在调用schedule(),这样即使当前进程还没有被挂入等待队列，也不会被
+	 * 剔除，仍然可以正常运行。
+         * 第二种情形：prepare_to_wait()中已挂入等待队列，顺利运行schedule()，那么当前进程将会被剔除运行队列，但是当条件满足时可以被唤醒。
+         * 第三种情形：A进程在等待condition满足，B进程某时设置condition，并唤醒等待队列上的A，A此时再次运行到prepare_to_wait（），此时发生中断，如果我们没有判定是否由于内核抢占而进行
+	 * schedule调用（即判定PREEMPT_ACTIVE位），则由于prev->state非零（非running),则当前进程会被剔除运行队列，而由于此后可能再也没有唤醒该进程的其它进程，该进程将永久的不到运行。
+	 * 第四种情形：如果在条件判断的时候被抢占，那么将会等到唤醒才能执行，则错过了判断条件的时机，和代码的语义不否。
+	 *
+	 * 为了避免这种情况，内核抢占过程中不能直接呼叫schedule()调度器，而是呼叫preempt_schedule()，再通过它来调用schedule()，preempt_schedule()会在调用schedule()之前设置
+	 * PREEMPT_ACTIVE标志，调用之后再清除这个标志。而schedule()会检查这个标志，如果设置了PREEMPT_ACTIVE标志，意味着这是从抢占过程中进入schedule()，对于不是TASK_RUNNING(state != 0)的
+	 * 进程，就不会调用deactivate_task()把进程从Run Queue移除
+	 *
 	 * state： -1 unrunnable, 0 runnable, >0 stopped
 	 */
 	if (prev->state && !(preempt_count() & PREEMPT_ACTIVE)) {
@@ -218,6 +246,7 @@ static void __sched __schedule(void)
 					try_to_wake_up_local(to_wakeup);
 			}
 		}
+		/* nvcsw表示主动切换，主动切换prev->state不是runnable */
 		switch_count = &prev->nvcsw;
 	}
 	/*如果task->on_rq为1，如果没有执行上面else路径则这种情况会成立*/
