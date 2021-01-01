@@ -582,14 +582,15 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
 	struct thread_info *ti;
 	int node = tsk_fork_get_node(orig);
 	int err;
-
+	/* 只是分配了内存 */
 	tsk = alloc_task_struct_node(node);
+	/* 只是分配了内存 */
 	ti = alloc_thread_info_node(tsk, node);
-	/* *dst = *src; */
+	/* *dst = *src;将src的内容赋值给dst，相当于给新的tsk初始化 */
 	err = arch_dup_task_struct(tsk, orig);
 
 	tsk->stack = ti;
-
+	/* 将orig栈的内容赋值给tsk的栈，相当于初始化 */
 	setup_thread_stack(tsk, orig);
 	clear_user_return_notifier(tsk);
 	clear_tsk_need_resched(tsk);
@@ -617,10 +618,9 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
 
 static inline void setup_thread_stack(struct task_struct *p, struct task_struct *org)
 {
-    /* org的thread_info赋值给新的thread_info
-     * 栈也目前使用父进程的
-     */
-
+    	/* org的thread_info赋值给新的thread_info，结构体赋值
+     	 * 栈也目前使用父进程的
+     	 */
 	*task_thread_info(p) = *task_thread_info(org);
 	task_thread_info(p)->task = p;
 }
