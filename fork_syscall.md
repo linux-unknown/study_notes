@@ -80,8 +80,8 @@ el0_sync:
 	/* esr_el1读到x25 */
 	mrs	x25, esr_el1			 	// read the syndrome register
 	/* #define ESR_ELx_EC_SHIFT	(26)
-     * x25左移ESR_ELx_EC_SHIFT位
-     */
+	 * x25左移ESR_ELx_EC_SHIFT位
+	 */
 	lsr	x24, x25, #ESR_ELx_EC_SHIFT	// exception class
 	/* #define ESR_ELx_EC_SVC64	(0x15)
 	 * 比较是不是ESR_ELx_EC_SVC64，如果是b.eq就执行
@@ -225,8 +225,8 @@ ENDPROC(el0_svc)
 #define __SYSCALL(nr, sym)	[nr] = sym,
 
 void * const sys_call_table[__NR_syscalls] __aligned(4096) = {
-	[0 ... __NR_syscalls - 1] = sys_ni_syscall,/* 现将所有的初始化为sys_ni_syscall */
-    /*最终头文件的展开形式如下,这是gnu扩展的数组初始化方式
+	[0 ... __NR_syscalls - 1] = sys_ni_syscall, /* 现将所有的初始化为sys_ni_syscall */
+    /* 最终头文件的展开形式如下,这是gnu扩展的数组初始化方式
      * [0] = sys_io_setup
      * [1] = sys_io_destroy,
      * [2] = sys_io_submit
@@ -901,7 +901,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 	memset(&p->thread.cpu_context, 0, sizeof(struct cpu_context));
 
 	if (likely(!(p->flags & PF_KTHREAD))) { /* 用户进程 */
-        /* 拷贝父进程的pt_regs */
+		/* 拷贝父进程的pt_regs */
 		*childregs = *current_pt_regs();
 		childregs->regs[0] = 0;  /* 子进程返回0 */
 		if (is_compat_thread(task_thread_info(p))) {
@@ -932,7 +932,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 		p->thread.cpu_context.x19 = stack_start;
 		p->thread.cpu_context.x20 = stk_sz;
 	}
-    /* 设置子进程的pc为ret_from_fork，sp为childregs，sp栈顶保存struct pt_regs */
+	/* 设置子进程的pc为ret_from_fork，sp为childregs，sp栈顶保存struct pt_regs */
 	p->thread.cpu_context.pc = (unsigned long)ret_from_fork;
 	p->thread.cpu_context.sp = (unsigned long)childregs;
 	p->thread.tp_value = tls;
@@ -1012,12 +1012,10 @@ el = 0, ret = 1
 ENTRY(cpu_switch_to)
 	/* x0为prev，x1为next*/
 	/* x8为prev.thread.cpu_context的指针*/
-	/* DEFINE(THREAD_CPU_CONTEXT,	offsetof(struct task_struct,
-	 * thread.cpu_context));
-	 */
+	/* DEFINE(THREAD_CPU_CONTEXT,	offsetof(struct task_struct,thread.cpu_context)); */
 	add	x8, x0, #THREAD_CPU_CONTEXT
 	mov	x9, sp
-	/*
+	/**
 	 * 将x19和x20存放到x8寄存器值对应的地址中，
 	 * 然后x8 + 16（因为存了两个64bit的寄存器，所以加16个字节）
 	 */
@@ -1026,28 +1024,36 @@ ENTRY(cpu_switch_to)
 	stp	x23, x24, [x8], #16
 	stp	x25, x26, [x8], #16
 	stp	x27, x28, [x8], #16
-	/*x29:fp, x9:sp,lr:pc*/
+	/** 
+	 * x29:fp
+	 * x9:sp
+	 * lr:pc
+	 */
 	stp	x29, x9, [x8], #16
-	/*
+	/**
 	 *lr，即x30寄存器，的值为返回调用cpu_switch_to函数的值。即，执行return last
 	 */
 	str	lr, [x8]
-	/*上面的代码把寄存器值存放到prev_task.thread.cpu_context中*/
+	/* 上面的代码把寄存器lr的值值存放到prev_task.thread.cpu_context.pc中 */
 
-	/* x8为next.thread.cpu_context的指针*/
-	/* 将 next.thread.cpu_context的值存到寄存器中*/
+	/* x8为next.thread.cpu_context的指针 */
+	/* 将next.thread.cpu_context的值存到寄存器x8中 */
 	add	x8, x1, #THREAD_CPU_CONTEXT
 	ldp	x19, x20, [x8], #16		// restore callee-saved registers
 	ldp	x21, x22, [x8], #16
 	ldp	x23, x24, [x8], #16
 	ldp	x25, x26, [x8], #16
 	ldp	x27, x28, [x8], #16
-	/* copy_thread中
-	 * p->thread.cpu_context.sp = (unsigned long)childregs;
-	 * 将pr_regs保存到x9
+	/**
+	 * copy_thread中p->thread.cpu_context.sp = (unsigned long)childregs;
+	 * cpu_context.fp 赋值给x29
+	 * cpu_context.sp 赋值给x9，即，将pr_regs保存到x9
 	 */
 	ldp	x29, x9, [x8], #16
-	/* 对于fork刚创建的进程，lr的值为ret_from_fork。已有的进程lr的值为return last的值*/
+	/** 
+	 * 将 cpu_context.pc 赋值给lr寄存器
+	 * 对于fork刚创建的进程，cpu_context.pc的值为ret_from_fork。已有的进程lr的值为return last的值
+	 */
 	ldr	lr, [x8]
 	mov	sp, x9/*x9 为sp的值*/
 	ret /*ret默认会跳转到x30寄存器（即lr寄存器）的值，这样就开始执行新进程了*/
