@@ -129,7 +129,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 {
 	int retval;
 	struct task_struct *p;
-    /* 删减了很多，主要看 copy_thread*/
+	/* 删减了很多，主要看 copy_thread */
 	/* dup  struct task_struct */
 	p = dup_task_struct(current);
 
@@ -191,7 +191,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 
 	if (likely(!(p->flags & PF_KTHREAD))) { /* 如果不是内核线程 */
 		*childregs = *current_pt_regs();
-        /* 用户进程的话，子进程返回0，所以regs[0]设置成0- */
+		/* 用户进程的话，子进程返回0，所以regs[0]设置成0 */
 		childregs->regs[0] = 0;
 		if (is_compat_thread(task_thread_info(p))) {
 			if (stack_start)
@@ -223,9 +223,9 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 		p->thread.cpu_context.x19 = stack_start;
 		p->thread.cpu_context.x20 = stk_sz;
 	}
-    /* 把pc设置为ret_from_fork函数指针，该函数为汇编编写 */
+	/* 把pc设置为ret_from_fork函数指针，该函数为汇编编写 */
 	p->thread.cpu_context.pc = (unsigned long)ret_from_fork;
-    /* 栈顶存放的是struct pt_regs结构体，该结构体是架构相关的 */
+	/* 栈顶存放的是struct pt_regs结构体，该结构体是架构相关的 */
 	p->thread.cpu_context.sp = (unsigned long)childregs;
 	p->thread.tp_value = tls;
 
@@ -442,7 +442,7 @@ int search_binary_handler(struct linux_binprm *bprm)
 			continue;
 		read_unlock(&binfmt_lock);
 		bprm->recursion_depth++;
-        /* 以elf的load_binary为例 */
+		/* 以elf的load_binary为例 */
 		retval = fmt->load_binary(bprm);
 		read_lock(&binfmt_lock);
 		put_binfmt(fmt);
@@ -505,10 +505,10 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	unsigned long reloc_func_desc __maybe_unused = 0;
 	int executable_stack = EXSTACK_DEFAULT;
 	
-    /* regs保存在栈顶 */
+	/* regs保存在栈顶 */
 	struct pt_regs *regs = current_pt_regs();
 
-    /* 删掉了解析elf文件的代码 */
+	/* 删掉了解析elf文件的代码 */
 	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
 	
 	current->mm->end_code = end_code;
@@ -531,7 +531,7 @@ static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 				unsigned long sp)
 {
 	start_thread_common(regs, pc);
-    /* 将pstate设置为用户模式 */
+	/* 将pstate设置为用户模式 */
 	regs->pstate = PSR_MODE_EL0t;
 	regs->sp = sp;
 }
@@ -544,7 +544,7 @@ static inline void start_thread_common(struct pt_regs *regs, unsigned long pc)
 {
 	memset(regs, 0, sizeof(*regs));
 	regs->syscallno = ~0UL;
-    /* 设置regs->pc为elf文件入口地址 */
+	/* 设置regs->pc为elf文件入口地址 */
 	regs->pc = pc;
 }
 ```
@@ -602,7 +602,7 @@ ret_to_user:
 	 */
 	and	x2, x1, #_TIF_WORK_MASK
 	cbnz	x2, work_pending /* 第二次进来则 */
-	enable_step_tsk x1, x2 /*应该是和debug有关，先不管*/
+	enable_step_tsk x1, x2 /*应该是和debug有关，先不管 */
 no_work_pending:
 	kernel_exit 0, ret = 0
 ENDPROC(ret_to_user)
@@ -655,7 +655,7 @@ el = 0
 	.if	\el == 0
 	ct_user_enter				// debug用，不用管
 	ldr	x23, [sp, #S_SP]		// load return stack pointer
-	msr	sp_el0, x23				// 用户空间的栈指针
+	msr	sp_el0, x23			// 用户空间的栈指针
 	.endif
 	msr	elr_el1, x21			// set up the return data，返回地址为用户空间入口地址
 	msr	spsr_el1, x22			/* x22保存为pstate */
