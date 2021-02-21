@@ -250,8 +250,8 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 ENTRY(ret_from_fork)
 	bl	schedule_tail
 	cbz	x19, 1f				// not a kernel thread,如果x19寄存器为0，则跳转到1f标签，
-	mov	x0, x20				//x20为线程的args指针，x19为线程函数的指针。
-	//跳转到kernel_init开始执行，此处使用blr，表示还会跳转回来，blr将pc + 4写入到x30寄存器
+	mov	x0, x20				// x20为线程的args指针，x19为线程函数的指针。
+	// 跳转到kernel_init开始执行，此处使用blr，表示还会跳转回来，blr将pc + 4写入到x30寄存器
 	blr	x19					
 1:	get_thread_info tsk
 	b	ret_to_user
@@ -318,14 +318,10 @@ static int do_execveat_common(int fd, struct filename *filename,
 	current->flags &= ~PF_NPROC_EXCEEDED;
 
 	retval = unshare_files(&displaced);
-
-
 	retval = -ENOMEM;
 	bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
 
 	retval = prepare_bprm_creds(bprm);
-
-
 	check_unsafe_exec(bprm);
 	current->in_execve = 1;
 	/* 打开文件 */

@@ -1055,7 +1055,7 @@ ENTRY(cpu_switch_to)
 	 * 对于fork刚创建的进程，cpu_context.pc的值为ret_from_fork。已有的进程lr的值为return last的值
 	 */
 	ldr	lr, [x8]
-	mov	sp, x9/*x9 为sp的值*/
+	mov	sp, x9 /*x9 为sp的值*/
 	ret /*ret默认会跳转到x30寄存器（即lr寄存器）的值，这样就开始执行新进程了*/
 ENDPROC(cpu_switch_to)
 ```
@@ -1077,7 +1077,7 @@ ENTRY(ret_from_fork)
 ENDPROC(ret_from_fork)
 ```
 
-##### ret_from_fork
+##### ret_to_user
 
 ```assembly
 /*
