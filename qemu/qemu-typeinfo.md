@@ -1,5 +1,7 @@
 # TypeInfo
 
+[TOC]
+
 在qemu中由很多设备的继承关系就是通过TypeInfo进行继承的
 
 ## TYPE_OBJECT
@@ -388,7 +390,7 @@ DeviceState *qdev_device_add(QemuOpts *opts, Error **errp)
 }
 ```
 
-### class初始化
+### ObjectClass初始化
 
 ```c
 static DeviceClass *qdev_get_device_class(const char **driver, Error **errp)
@@ -431,7 +433,7 @@ static DeviceClass *qdev_get_device_class(const char **driver, Error **errp)
 }
 ```
 
-### object_class_by_name
+#### object_class_by_name
 
 ```c
 ObjectClass *object_class_by_name(const char *typename)
@@ -445,7 +447,7 @@ ObjectClass *object_class_by_name(const char *typename)
 }
 ```
 
-### type_initialize
+#### type_initialize
 
 ```c
 static void type_initialize(TypeImpl *ti)
@@ -577,7 +579,7 @@ Object *object_new(const char *typename)
 }
 ```
 
-### object_new_with_type
+#### object_new_with_type
 
 ```c
 Object *object_new_with_type(Type type)
@@ -594,7 +596,7 @@ Object *object_new_with_type(Type type)
 }
 ```
 
-### object_initialize_with_type
+#### object_initialize_with_type即object初始化
 
 ```c
 void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
@@ -616,7 +618,7 @@ void object_initialize_with_type(void *data, size_t size, TypeImpl *type)
 }
 ```
 
-### object_init_with_type
+#### object_init_with_type
 
 ```c
 static void object_init_with_type(Object *obj, TypeImpl *ti)
@@ -632,8 +634,9 @@ static void object_init_with_type(Object *obj, TypeImpl *ti)
 }
 ```
 
+## 总结
 
+- type_initialize 递归的调用class_init
 
-type_initialize 递归的调用class_init
+- object_new会创建Object，调用type_initialize 和 object_new_with_type，object_new_with_type会递归调用instance_init
 
-object_new会创建调用type_initialize 和 object_new_with_type，object_new_with_type会递归调用instance_init
