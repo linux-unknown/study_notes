@@ -77,7 +77,7 @@ static void check_hung_uninterruptible_tasks(unsigned long timeout)
 }
 ```
 
-
+#### check_hung_task
 
 ```c
 static void check_hung_task(struct task_struct *t, unsigned long timeout)
