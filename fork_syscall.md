@@ -18,6 +18,22 @@ ENTRY(__ioctl)
 PSEUDO_END (__ioctl)
 ```
 
+## arm64 栈寄存器
+
+## arm64 栈寄存器
+
+arm64的栈寄存器在EL0，EL1，EL2，EL3，分别有一个寄存器，SP_EL0，SP_EL1，SP_EL2，SP_EL3，EL0只能使用SP_EL0，EL1，EL2，EL3可以使用EL0，也可以使用对应EL的SP，这个通过PSTATE.SP 位来设置，可以通过下面的指令操作该位
+
+```
+msr	SPsel, #1
+```
+
+默认情况下，产生异常时，使用对应异常级别的SP_ELx，软件页可以在当前的异常级别通过修改PSTATE.SP来选择使用SP_EL0或SP_ELx(EL0只能使用SP_EL0)。
+
+在发生异常时，即使没有改变异常级别，也会选择该异常级别的SP_ELx，例如，当前在EL1，使用的是SP_EL0，然后产生异常到EL1，那么SP就会切换为SP_EL1。
+
+arm64 linux内核SPsel设置位1。在内核里面会使用SP_ELx。内核可能运行在EL2或EL1。
+
 ## arm64 异常向量表
 
 ```assembly
@@ -26,6 +42,7 @@ PSEUDO_END (__ioctl)
  */
 	.align	11
 ENTRY(vectors)
+	/* 同级别产生的异常,如果产生异常之前使用SP_EL0 */
 	ventry	el1_sync_invalid		// Synchronous EL1t
 	ventry	el1_irq_invalid			// IRQ EL1t
 	ventry	el1_fiq_invalid			// FIQ EL1t
@@ -34,11 +51,12 @@ ENTRY(vectors)
 	/* ARMv8在AArch64中的模式EL0t、EL1t & EL1h、EL2t & EL2h、EL3t & EL3h，
 	 * 后缀t表示SP_EL0堆栈指针，h表示SP_ELx堆栈指针 
 	 */
+	/* 同级别产生异常，如果产生异常之前使用SP_ELx */
 	ventry	el1_sync			// Synchronous EL1h
 	ventry	el1_irq				// IRQ EL1h
 	ventry	el1_fiq_invalid			// FIQ EL1h
 	ventry	el1_error_invalid		// Error EL1h
-
+	/* 低级别切换到高级别 */
 	ventry	el0_sync			// Synchronous 64-bit EL0
 	ventry	el0_irq				// IRQ 64-bit EL0
 	ventry	el0_fiq_invalid			// FIQ 64-bit EL0

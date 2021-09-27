@@ -998,7 +998,7 @@ ENTRY(secondary_startup)
 	pgtbl	x25, x26, x28			// x25=TTBR0, x26=TTBR1
 	ldr	x12, [x23, #CPU_INFO_SETUP]
 	add	x12, x12, x28			// __virt_to_phys
-	/*调用__cpu_setup*/
+	/*调用 __cpu_setup __cpu_setup初始化为打开mmu初始化cpu */
 	blr	x12				// initialise processor
 
 	ldr	x21, =secondary_data

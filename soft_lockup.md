@@ -182,7 +182,7 @@ static int smpboot_thread_fn(void *data)
 
 ### watchdog_threads
 
-```
+```c++
 static struct smp_hotplug_thread watchdog_threads = {
 	.store			= &softlockup_watchdog,
 	.thread_should_run	= watchdog_should_run,
@@ -397,7 +397,7 @@ static int is_softlockup(unsigned long touch_ts)
          *                       超时函数退出，watchdog执行，更新时间  超时函数退出，watchdog执行，更新时间
          * watchdog_touch_ts  0	 4(忽略微小差异)					   8
          * 如果smpboot_thread_fn不能得到执行，那么watchdog就不能更新时间，定时器中的时间就会超过watchdog_touch_ts更多
-         * 知道超过get_softlockup_thresh()这么多
+         * 直到超过get_softlockup_thresh()这么多
          */
 		if (time_after(now, touch_ts + get_softlockup_thresh()))
 			return now - touch_ts;

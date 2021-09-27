@@ -21,10 +21,6 @@ static int __ref kernel_init(void *unused)
 {
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
-		if (!ret)
-			return 0;
-		pr_err("Failed to execute %s (error %d)\n",
-		       ramdisk_execute_command, ret);
 	}
 
 	panic("No working init found.  Try passing init= option to kernel. "
@@ -178,7 +174,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 }
 ```
 
-copy_thread
+#### copy_thread
 
 ```c
 int copy_thread(unsigned long clone_flags, unsigned long stack_start,
@@ -244,8 +240,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
  * This is how we return from a fork.
  */
 /* 
- *在执行cpu_switch_to的时候会将thread.cpu_context中的x19，x20赋值到x19和x20寄存器
- *
+ * 在执行cpu_switch_to的时候会将thread.cpu_context中的x19，x20赋值到x19和x20寄存器
  */
 ENTRY(ret_from_fork)
 	bl	schedule_tail
@@ -384,6 +379,60 @@ static int do_execveat_common(int fd, struct filename *filename,
 }
 ```
 
+#### bprm_mm_init
+
+```c
+static int bprm_mm_init(struct linux_binprm *bprm)
+{
+	int err;
+	struct mm_struct *mm = NULL;
+	/* 分配一个 mm 内存 */
+	bprm->mm = mm = mm_alloc();
+	err = __bprm_mm_init(bprm);
+	return 0;
+}
+```
+
+##### __bprm_mm_init
+
+```c
+static int __bprm_mm_init(struct linux_binprm *bprm)
+{
+	int err;
+	struct vm_area_struct *vma = NULL;
+	struct mm_struct *mm = bprm->mm;
+
+	bprm->vma = vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
+
+	down_write(&mm->mmap_sem);
+	vma->vm_mm = mm;
+
+	/*
+	 * Place the stack at the largest stack address the architecture
+	 * supports. Later, we'll move this to an appropriate place. We don't
+	 * use STACK_TOP because that can depend on attributes which aren't
+	 * configured yet.
+	 */
+	BUILD_BUG_ON(VM_STACK_FLAGS & VM_STACK_INCOMPLETE_SETUP);
+	vma->vm_end = STACK_TOP_MAX;
+	vma->vm_start = vma->vm_end - PAGE_SIZE;
+	vma->vm_flags = VM_SOFTDIRTY | VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP;
+	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+	INIT_LIST_HEAD(&vma->anon_vma_chain);
+	/* 将vma添加到mm中 */
+	err = insert_vm_struct(mm, vma);
+
+	mm->stack_vm = mm->total_vm = 1;
+	arch_bprm_mm_init(mm, vma);
+	up_write(&mm->mmap_sem);
+    /* 用户内存的顶不，STACK_TOP_MAX - sizeof(void *)
+     * #define STACK_TOP_MAX		TASK_SIZE_64 /* 用户进程地址空间的大小 */
+     */
+	bprm->p = vma->vm_end - sizeof(void *);
+	return 0;
+}
+```
+
 #### exec_binprm
 
 ```c
@@ -485,6 +534,8 @@ static struct linux_binfmt elf_format = {
 ##### load_elf_binary
 
 ```c
+#define current_pt_regs() task_pt_regs(current)
+
 static int load_elf_binary(struct linux_binprm *bprm)
 {
 	struct file *interpreter = NULL; /* to shut gcc up */
@@ -513,7 +564,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	current->mm->end_data = end_data;
 	current->mm->start_stack = bprm->p;
 
-	/* elf_entry为elf入口地址，bprm->p为栈指针 */
+	/* elf_entry为elf入口地址，bprm->p为用户态的栈指针 */
 	start_thread(regs, elf_entry, bprm->p);
 
 	return retval;
@@ -598,7 +649,7 @@ ret_to_user:
 	 */
 	and	x2, x1, #_TIF_WORK_MASK
 	cbnz	x2, work_pending /* 第二次进来则 */
-	enable_step_tsk x1, x2 /*应该是和debug有关，先不管 */
+	enable_step_tsk x1, x2 /* 应该是和debug有关，先不管 */
 no_work_pending:
 	kernel_exit 0, ret = 0
 ENDPROC(ret_to_user)
@@ -643,7 +694,7 @@ work_resched:
 
 ###### kernel_exit
 
-```
+```assembly
 el = 0
 .macro	kernel_exit, el, ret = 0
 	/* DEFINE(S_PC,	offsetof(struct pt_regs, pc)); */
