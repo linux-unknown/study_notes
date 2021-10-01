@@ -1,0 +1,12 @@
+#0  parse_chr (dev=dev@entry=0x3904340, str=0x55e0980 "drive-virtio-disk5", ptr=ptr@entry=0x3904420, propname=0x7ecc1b "chardev", 
+    errp=errp@entry=0x7fffffffc650) at hw/core/qdev-properties-system.c:142
+#1  0x000000000060d765 in set_pointer (obj=<optimized out>, v=0x1d1fb20, prop=0xd8b480 <vhost_user_blk_properties>, parse=0x60da30 <parse_chr>,
+    name=0x51b3db0 "chardev", errp=0x7fffffffc650) at hw/core/qdev-properties-system.c:65
+#2  0x000000000071bf2d in object_property_parse (obj=0x38fc000, string=<optimized out>, name=0x1c7e7e0 "chardev", errp=0x7fffffffc650) at qom/object.c:1295
+#3  0x0000000000597a32 in set_property (opaque=<optimized out>, name=<optimized out>, value=<optimized out>, errp=0x7fffffffc6d0) at qdev-monitor.c:181
+#4  0x00000000007d5dad in qemu_opt_foreach (opts=opts@entry=0x1c8e640, func=func@entry=0x5979b0 <set_property>, opaque=opaque@entry=0x38fc000, 
+    errp=errp@entry=0x7fffffffc6d0) at util/qemu-option.c:618
+#5  0x0000000000598cc4 in qdev_device_add (opts=0x1c8e640, errp=errp@entry=0x7fffffffc710) at qdev-monitor.c:609
+#6  0x00000000005a4c00 in device_init_func (opaque=<optimized out>, opts=<optimized out>, errp=<optimized out>) at vl.c:2488
+#7  0x00000000007d6962 in qemu_opts_foreach (list=<optimized out>, func=func@entry=0x5a4bd0 <device_init_func>, opaque=opaque@entry=0x0, errp=errp@entry=0x0)
+#8  0x00000000004776f8 in main (argc=<optimized out>, argv=<optimized out>, envp=<optimized out>) at vl.c:4854

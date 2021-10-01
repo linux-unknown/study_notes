@@ -1,0 +1,79 @@
+virtio_pci_realize
+	memory_region_init
+	memory_region_init_alias
+	address_space_init
+	
+virtio_device_realize
+	virtio_bus_device_plugged
+		virtio_pci_device_plugged
+			virtio_pci_modern_regions_init
+			virtio_pci_modern_mem_region_map
+			pci_register_bar
+			proxy->pci_dev.config_write = virtio_write_config;
+			proxy->pci_dev.config_read = virtio_read_config;
+			
+			
+
+pci_qdev_realize
+	do_pci_register_device
+		/* 下面的读写函数都是读写pci配置空间的 */
+		if (!config_read)
+			config_read = pci_default_read_config;
+		if (!config_write)
+			config_write = pci_default_write_config;
+		pci_dev->config_read = config_read;
+		pci_dev->config_write = config_write;
+		bus->devices[devfn] = pci_dev;
+
+
+	static void i440fx_pcihost_realize(DeviceState *dev, Error **errp)
+	{
+		PCIHostState *s = PCI_HOST_BRIDGE(dev);
+		SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+
+		sysbus_add_io(sbd, 0xcf8, &s->conf_mem);
+		sysbus_init_ioports(sbd, 0xcf8, 4);
+
+		sysbus_add_io(sbd, 0xcfc, &s->data_mem);
+		sysbus_init_ioports(sbd, 0xcfc, 4);
+	}
+
+
+	MemoryRegion *get_system_io(void)
+	{
+		return system_io;
+	}
+
+	void sysbus_add_io(SysBusDevice *dev, hwaddr addr,
+						   MemoryRegion *mem)
+	{
+		memory_region_add_subregion(get_system_io(), addr, mem);
+	}
+
+
+	void sysbus_init_ioports(SysBusDevice *dev, pio_addr_t ioport, pio_addr_t size)
+	{
+		pio_addr_t i;
+
+		for (i = 0; i < size; i++) {
+			dev->pio[dev->num_pio++] = ioport++;
+		}
+	}
+
+    memory_region_init_io(&s->conf_mem, obj, &pci_host_conf_le_ops, s,
+                          "pci-conf-idx", 4);
+    memory_region_init_io(&s->data_mem, obj, &pci_host_data_le_ops, s,
+                          "pci-conf-data", 4);
+
+	const MemoryRegionOps pci_host_data_le_ops = {
+		.read = pci_host_data_read,
+		.write = pci_host_data_write,
+		.endianness = DEVICE_LITTLE_ENDIAN,
+	};
+
+	pci_host_data_write		
+		pci_data_write
+			void pci_host_config_write_common
+				pci_dev->config_write(pci_dev, addr, val, MIN(len, limit - addr));
+
+	

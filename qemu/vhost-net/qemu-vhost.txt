@@ -1,0 +1,68 @@
+#0  virNetDevGetMTU (ifname=ifname@entry=0x7f84fc016de0 "vbr2525476") at util/virnetdev.c:414
+#1  0x00007f8524a5e1cc in virNetDevSetMTUFromDevice (ifname=0x7f850c140ce0 "veni_vFsp6g8y", 
+    otherifname=otherifname@entry=0x7f84fc016de0 "vbr2525476") at util/virnetdev.c:504
+#2  0x00007f8524a6abe0 in virNetDevTapAttachBridge (tapname=0x7f850c140ce0 "veni_vFsp6g8y", 
+    brname=brname@entry=0x7f84fc016de0 "vbr2525476", macaddr=macaddr@entry=0x7f84fc01d0d4, 
+    vmuuid=vmuuid@entry=0x7f84fc0166b8 "\304D\230\250\071mK\205\204x\367n\033\363b\037\240 ", 
+    virtPortProfile=virtPortProfile@entry=0x0, virtVlan=virtVlan@entry=0x0, mtu=mtu@entry=0, 
+    actualMTU=actualMTU@entry=0x0) at util/virnetdevtap.c:544
+#3  0x00007f8524a6ad56 in virNetDevTapCreateInBridgePort (brname=brname@entry=0x7f84fc016de0 "vbr2525476", 
+    ifname=ifname@entry=0x7f84fc01d1e0, macaddr=macaddr@entry=0x7f84fc01d0d4, 
+    vmuuid=vmuuid@entry=0x7f84fc0166b8 "\304D\230\250\071mK\205\204x\367n\033\363b\037\240 ", 
+    tunpath=tunpath@entry=0x7f8514aae6ec "/dev/net/tun", tapfd=tapfd@entry=0x7f850c141a90, tapfdSize=8,
+    virtPortProfile=0x0, virtVlan=virtVlan@entry=0x0, coalesce=coalesce@entry=0x0, mtu=mtu@entry=0, 
+    actualMTU=actualMTU@entry=0x0, flags=flags@entry=3) at util/virnetdevtap.c:658
+#4  0x00007f8514a731f4 in qemuInterfaceBridgeConnect (def=def@entry=0x7f84fc0166b0, 
+    driver=driver@entry=0x7f850c100ae0, net=net@entry=0x7f84fc01d0d0, tapfd=0x7f850c141a90, 
+    tapfdSize=tapfdSize@entry=0x7f851bb23138) at qemu/qemu_interface.c:545
+#5  0x00007f85149c1330 in qemuBuildInterfaceCommandLine (driver=driver@entry=0x7f850c100ae0, 
+    logManager=logManager@entry=0x7f850c13a8b0, cmd=cmd@entry=0x7f850c141b60, 
+    def=def@entry=0x7f84fc0166b0, net=net@entry=0x7f84fc01d0d0, qemuCaps=qemuCaps@entry=0x7f850c1458c0,
+    vlan=-1, bootindex=bootindex@entry=0, vmop=vmop@entry=VIR_NETDEV_VPORT_PROFILE_OP_CREATE, 
+    standalone=standalone@entry=false, nnicindexes=nnicindexes@entry=0x7f851bb23470, 
+    nicindexes=nicindexes@entry=0x7f851bb23478) at qemu/qemu_command.c:8855
+#6  0x00007f85149c6f48 in qemuBuildNetCommandLine (bootHostdevNet=0x7f851bb2328c, 
+    nicindexes=0x7f851bb23478, nnicindexes=0x7f851bb23470, standalone=false, 
+    vmop=VIR_NETDEV_VPORT_PROFILE_OP_CREATE, qemuCaps=0x7f850c1458c0, def=0x7f84fc0166b0, 
+    cmd=0x7f850c141b60, logManager=0x7f850c13a8b0, driver=0x7f850c100ae0) at qemu/qemu_command.c:9135
+#7  qemuBuildCommandLine (driver=driver@entry=0x7f850c100ae0, logManager=0x7f850c13a8b0, 
+    def=def@entry=0x7f84fc0166b0, monitor_chr=monitor_chr@entry=0x7f850c154690,
+    monitor_json=monitor_json@entry=true, qemuCaps=qemuCaps@entry=0x7f850c1458c0, 
+    migrateURI=migrateURI@entry=0x0, snapshot=snapshot@entry=0x0, 
+    vmop=vmop@entry=VIR_NETDEV_VPORT_PROFILE_OP_CREATE, standalone=standalone@entry=false, 
+    enableFips=enableFips@entry=false, nodeset=nodeset@entry=0x0, 
+    nnicindexes=nnicindexes@entry=0x7f851bb23470, nicindexes=nicindexes@entry=0x7f851bb23478, 	
+    domainLibDir=0x7f850c147070 "/usr/local/var/lib/libvirt/qemu/domain-4-c44498a8-396d-4b85-8", 
+    newmig=newmig@entry=false) at qemu/qemu_command.c:10498
+#8  0x00007f8514a081d9 in qemuProcessLaunch (conn=conn@entry=0x7f8508000ca0, 
+    driver=driver@entry=0x7f850c100ae0, vm=vm@entry=0x7f850c0f2e80, 
+    asyncJob=asyncJob@entry=QEMU_ASYNC_JOB_START, incoming=incoming@entry=0x0, 
+    snapshot=snapshot@entry=0x0, vmop=vmop@entry=VIR_NETDEV_VPORT_PROFILE_OP_CREATE, flags=flags@entry=17)
+    at qemu/qemu_process.c:6068
+#9  0x00007f8514a09c69 in qemuProcessStart (conn=conn@entry=0x7f8508000ca0, 
+    driver=driver@entry=0x7f850c100ae0, vm=vm@entry=0x7f850c0f2e80, updatedCPU=updatedCPU@entry=0x0, 
+    asyncJob=asyncJob@entry=QEMU_ASYNC_JOB_START, migrateFrom=migrateFrom@entry=0x0, 
+    migrateFd=migrateFd@entry=-1, migratePath=migratePath@entry=0x0, snapshot=snapshot@entry=0x0, 
+    vmop=vmop@entry=VIR_NETDEV_VPORT_PROFILE_OP_CREATE, flags=17, flags@entry=1)
+    at qemu/qemu_process.c:6464
+#10 0x00007f8514a6be56 in qemuDomainObjStart (conn=0x7f8508000ca0, driver=driver@entry=0x7f850c100ae0, 
+    vm=0x7f850c0f2e80, flags=flags@entry=0, asyncJob=QEMU_ASYNC_JOB_START) at qemu/qemu_driver.c:7173
+#11 0x00007f8514a6c596 in qemuDomainCreateWithFlags (dom=0x7f850c000a00, flags=0)
+    at qemu/qemu_driver.c:7227
+#12 0x00007f8524b3a32c in virDomainCreate (domain=domain@entry=0x7f850c000a00) at libvirt-domain.c:6532
+#13 0x00005557081bc47e in remoteDispatchDomainCreate (server=0x55570845a210, msg=0x5557084734f0, 
+    args=<optimized out>, rerr=0x7f851bb23c50, client=0x555708467dd0) at remote_dispatch.h:4222
+#14 remoteDispatchDomainCreateHelper (server=0x55570845a210, client=0x555708467dd0, msg=0x5557084734f0,
+    rerr=0x7f851bb23c50, args=<optimized out>, ret=0x7f850c14fbf0) at remote_dispatch.h:4198
+#15 0x00007f8524b99992 in virNetServerProgramDispatchCall (msg=0x5557084734f0, client=0x555708467dd0, 
+    server=0x55570845a210, prog=0x555708461f80) at rpc/virnetserverprogram.c:437
+#16 virNetServerProgramDispatch (prog=0x555708461f80, server=server@entry=0x55570845a210, 
+    client=0x555708467dd0, msg=0x5557084734f0) at rpc/virnetserverprogram.c:307
+#17 0x00005557081cd15d in virNetServerProcessMsg (msg=<optimized out>, prog=<optimized out>, 
+    client=<optimized out>, srv=0x55570845a210) at rpc/virnetserver.c:148
+#18 virNetServerHandleJob (jobOpaque=<optimized out>, opaque=0x55570845a210) at rpc/virnetserver.c:169
+#19 0x00007f8524a93681 in virThreadPoolWorker (opaque=opaque@entry=0x55570844ae20)
+    at util/virthreadpool.c:167
+#20 0x00007f8524a92a08 in virThreadHelper (data=<optimized out>) at util/virthread.c:206
+#21 0x00007f8521cafe25 in start_thread (arg=0x7f851bb24700) at pthread_create.c:308
+#22 0x00007f85219dc35d in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:113	

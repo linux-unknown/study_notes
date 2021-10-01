@@ -1,0 +1,23 @@
+#0  pci_bus_realize (qbus=0x54ce400, errp=0x7fffffffc4c0) at hw/pci/pci.c:108
+#1  0x0000000000603e85 in bus_set_realized (obj=<optimized out>, value=<optimized out>, errp=0x7fffffffc5d0) at hw/core/qdev.c:782
+#2  0x0000000000718dcd in property_set_bool (obj=0x54ce400, v=<optimized out>, name=<optimized out>, opaque=0x5885c30, errp=0x7fffffffc5d0)
+    at qom/object.c:1861
+#3  0x000000000071ccbd in object_property_set_qobject (obj=0x54ce400, value=<optimized out>, name=0x8ea4ab "realized", errp=0x7fffffffc5d0)
+    at qom/qom-qobject.c:26
+#4  0x000000000071ac46 in object_property_set_bool (obj=0x54ce400, value=<optimized out>, name=0x8ea4ab "realized", errp=0x7fffffffc5d0)
+    at qom/object.c:1158
+#5  0x0000000000605db6 in device_set_realized (obj=<optimized out>, value=<optimized out>, errp=0x7fffffffc6d0) at hw/core/qdev.c:1100
+#6  0x0000000000718dcd in property_set_bool (obj=0x5300a00, v=<optimized out>, name=<optimized out>, opaque=0x5885a60, errp=0x7fffffffc6d0)
+    at qom/object.c:1861
+#7  0x000000000071ccbd in object_property_set_qobject (obj=0x5300a00, value=<optimized out>, name=0x8ea4ab "realized", errp=0x7fffffffc6d0)
+#8  0x000000000071ac46 in object_property_set_bool (obj=0x5300a00, value=<optimized out>, name=0x8ea4ab "realized", errp=0x7fffffffc6d0)
+    at qom/object.c:1158
+#9  0x0000000000604891 in qdev_init_nofail (dev=dev@entry=0x5300a00) at hw/core/qdev.c:371
+#10 0x000000000066cc7d in i440fx_init (host_type=host_type@entry=0x80c3e7 "i440FX-pcihost", pci_type=pci_type@entry=0x80c3e0 "i440FX", 
+    pi440fx_state=pi440fx_state@entry=0x7fffffffc7d0, piix3_devfn=piix3_devfn@entry=0x7fffffffc7c4, isa_bus=isa_bus@entry=0x7fffffffc7c8, 
+    pic=pic@entry=0x1cbcf00, address_space_mem=address_space_mem@entry=0x1c8d900, address_space_io=address_space_io@entry=0x1c8da00, 
+    ram_size=274877906944, below_4g_mem_size=3221225472, above_4g_mem_size=271656681472, pci_address_space=pci_address_space@entry=0x4a3be00, 
+    ram_memory=0x4a3c000) at hw/pci-host/piix.c:340
+#11 0x000000000051c181 in pc_init1 (machine=0x1d5a000, pci_type=0x80c3e0 "i440FX", host_type=0x80c3e7 "i440FX-pcihost")
+    at /usr/src/debug/qemu-kvm-2.6.0_127/hw/i386/pc_piix.c:191
+#12 0x0000000000477712 in main (argc=<optimized out>, argv=<optimized out>, envp=<optimized out>) at vl.c:4835

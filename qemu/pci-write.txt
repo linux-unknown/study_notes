@@ -1,0 +1,23 @@
+#0  vhost_user_set_vring_base (dev=0x37f9b00, ring=0x7ff306b61350) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/virtio/vhost-user.c:444
+#1  0x00000000005119f5 in vhost_virtqueue_start (idx=0, vq=<optimized out>, vdev=0x6d72340, dev=0x37f9b00) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/virtio/vhost.c:868
+#2  vhost_dev_start (hdev=hdev@entry=0x37f9b00, vdev=vdev@entry=0x6d72340) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/virtio/vhost.c:1472
+#3  0x00000000004f6e0b in vhost_net_start_one (dev=0x6d72340, net=0x37f9b00) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/net/vhost_net.c:232
+#4  vhost_net_start (dev=dev@entry=0x6d72340, ncs=0x376ac20, total_queues=total_queues@entry=2) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/net/vhost_net.c:324
+#5  0x00000000004f3c7d in virtio_net_vhost_status (status=15 '\017', n=0x6d72340) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/net/virtio-net.c:160
+#6  virtio_net_set_status (vdev=<optimized out>, status=<optimized out>) at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/net/virtio-net.c:233
+#7  0x000000000050ba55 in virtio_set_status (vdev=vdev@entry=0x6d72340, val=val@entry=15 '\017') at /usr/src/debug/qemu-kvm-2.6.0_4110692/hw/virtio/virtio.c:792
+#8  0x00000000006b5bfe in virtio_pci_common_write (opaque=0x6d6a000, addr=20, val=15, size=<optimized out>) at hw/virtio/virtio-pci.c:1371
+#9  0x00000000004c04f1 in memory_region_write_accessor (mr=0x6d6a988, addr=20, value=<optimized out>, size=1, shift=<optimized out>, mask=<optimized out>, attrs=...) at /usr/src/debug/qemu-kvm-2.6.0_4110692/memory.c:527
+#10 0x00000000004bdf6f in access_with_adjusted_size (addr=addr@entry=20, value=value@entry=0x7ff306b61668, size=size@entry=1, access_size_min=<optimized out>, access_size_max=<optimized out>, access=access@entry=
+    0x4c0470 <memory_region_write_accessor>, mr=mr@entry=0x6d6a988, attrs=attrs@entry=...) at /usr/src/debug/qemu-kvm-2.6.0_4110692/memory.c:593
+#11 0x00000000004c29e6 in memory_region_dispatch_write (mr=mr@entry=0x6d6a988, addr=addr@entry=20, data=15, size=size@entry=1, attrs=..., attrs@entry=...) at /usr/src/debug/qemu-kvm-2.6.0_4110692/memory.c:1446
+#12 0x00000000004804fa in address_space_write_continue (mr=0x6d6a988, l=1, addr1=20, len=1, buf=0x7ff3154b7028 "\017", attrs=..., addr=4265607188, as=0xfd66e0 <address_space_memory>)
+    at /usr/src/debug/qemu-kvm-2.6.0_4110692/exec.c:2635
+#13 address_space_write (as=<optimized out>, addr=<optimized out>, attrs=..., buf=<optimized out>, len=<optimized out>) at /usr/src/debug/qemu-kvm-2.6.0_4110692/exec.c:2681
+#14 0x0000000000480b3e in address_space_rw (as=<optimized out>, addr=<optimized out>, attrs=..., attrs@entry=..., buf=buf@entry=0x7ff3154b7028 "\017", len=<optimized out>, is_write=<optimized out>)
+#14 0x0000000000480b3e in address_space_rw (as=<optimized out>, addr=<optimized out>, attrs=..., attrs@entry=..., buf=buf@entry=0x7ff3154b7028 "\017", len=<optimized out>, is_write=<optimized out>)
+    at /usr/src/debug/qemu-kvm-2.6.0_4110692/exec.c:2784
+#15 0x00000000004bce86 in kvm_cpu_exec (cpu=cpu@entry=0x51e2000) at /usr/src/debug/qemu-kvm-2.6.0_4110692/kvm-all.c:2037
+#16 0x00000000004a97fa in qemu_kvm_cpu_thread_fn (arg=<optimized out>) at /usr/src/debug/qemu-kvm-2.6.0_4110692/cpus.c:1123
+#17 0x00007ff311a37e25 in start_thread (arg=0x7ff306b62700) at pthread_create.c:308
+#18 0x00007ff30d6fd35d in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:113

@@ -1,0 +1,30 @@
+/usr/local/bin/qemu-system-x86_64 
+-name guest=7c9388d0-a079-4ccd-8f50-8e1a20e2eb4c,debug-threads=on 
+-S 
+-object secret,id=masterKey0,format=raw,file=/usr/local/var/lib/libvirt/qemu/domain-278-7c9388d0-a079-4ccd-8/master-key.aes 
+-machine pc-i440fx-rhel7.3.0,accel=kvm,usb=off,dump-guest-core=off 
+-cpu Skylake,-avx512f,-avx512dq,-avx512cd,-avx512bw,-avx512vl,+hypervisor 
+-m 4096 
+-realtime mlock=off 
+-smp 4,sockets=2,cores=2,threads=1 
+-object iothread,id=iothread1 
+-object memory-backend-file,id=ram-node0,prealloc=yes,mem-path=/dev/hugepages/libvirt/qemu/278-7c9388d0-a079-4ccd-8,share=yes,size=4294967296,host-nodes=0,policy=preferred 
+-numa node,nodeid=0,cpus=0-3,memdev=ram-node0 
+-uuid 7c9388d0-a079-4ccd-8f50-8e1a20e2eb4c 
+-smbios type=1,serial=7c9388d0-a079-4ccd-8f50-8e1a20e2eb4c,uuid=7c9388d0-a079-4ccd-8f50-8e1a20e2eb4c 
+-no-user-config 
+-nodefaults 
+-chardev socket,id=charmonitor,path=/usr/local/var/lib/libvirt/qemu/domain-278-7c9388d0-a079-4ccd-8/monitor.sock,server,nowait 
+-mon chardev=charmonitor,id=monitor,mode=control 
+-rtc base=utc,clock=vm -global kvm-pit.lost_tick_policy=delay 
+-no-hpet 
+-no-shutdown 
+-boot strict=on -device piix3-usb-uhci,id=usb,bus=pci.0,addr=0x1.0x2 
+-drive file=/lv_tonnylu/centos72-2.qcow2,format=qcow2,if=none,id=drive-virtio-disk0,cache=none,aio=native 
+-device virtio-blk-pci,iothread=iothread1,scsi=off,bus=pci.0,addr=0x3,drive=drive-virtio-disk0,id=virtio-disk0,bootindex=1 
+-drive file=/data/ffelixwu/test.qcow2,format=qcow2,if=none,id=drive-virtio-disk1,cache=none,aio=native 
+-device virtio-blk-pci,iothread=iothread1,scsi=off,bus=pci.0,addr=0x9,drive=drive-virtio-disk1,id=virtio-disk1 
+-chardev socket,id=drive-virtio-disk5,path=/var/run/spdk/vhost_blk_socket-dcc91ede-3d1a-4a93-8ea5-f8ba74637ee4-nvme,reconnect=10 
+-device vhost-user-blk-pci,chardev=drive-virtio-disk5,num-queues=4,bus=pci.0,addr=0x4,id=virtio-disk5 -chardev pty,id=charserial0 
+-device isa-serial,chardev=charserial0,id=serial0 -vnc 0.0.0.0:0 -k en-us -device cirrus-vga,id=video0,bus=pci.0,addr=0x2 
+-device virtio-balloon-pci,id=balloon0,bus=pci.0,addr=0x8 -msg timestamp=on
